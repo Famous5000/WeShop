@@ -2,27 +2,7 @@ npcstaticlist = {}
 
 if SERVER then
 
---[[
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\CONVARS\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-]]
-
---
---
---
---
---
---
---
+-- CVARS INIT
 
 -- for Debugging (START) --
 function wblDebug(a) 
@@ -32,6 +12,63 @@ function wblDebug(a)
     end
 end
 -- for Debugging (END) --
+
+-- universal money modification function (handles positive and negative)
+function changeMoney(player,amount)
+	if amount == 0 then -- called via sync_user
+		local old = player:GetPData("wblmoneyOld",player:GetPData("wblmoney",-1))
+		local cur = player:GetPData("wblmoney",-1)
+		if old == -1 then
+			warn("Someone's old *and* current money was corrupted. Ignoring!")
+		elseif old == cur then
+			warn("Old data was corrupted, or nothing changed. Re-syncing old data just in case.")
+			player:SetPData("wblmoneyOld",old)
+		else -- the intentional bit.
+			if old < cur then
+				net.Start("plyMonzupdateToC")
+				net.WriteInt(new, 32)
+				net.WriteInt(new-old, 32)
+				net.Send(player)
+			else
+				net.Start("plyMonzupdateToCLose")
+				net.WriteInt(new, 32)
+				net.WriteInt(old-new, 32)
+				net.Send(player)
+			end
+		end
+	else -- not called via sync_user, time to handle money.
+		local old = player:GetPData("wblmoneyOld",player:GetPData("wblmoney",-1))
+		local cur = player:GetPData("wblmoney",-1)
+		cur = cur + amount
+		cur = math.ceil( cur )
+		local maxmonz = tonumber(wblmonmax:GetInt())
+		if cur < 0 then
+			player:SetPData( "wblmoney", 0 ) 
+			cur = 0
+		elseif cur > maxmonz then
+			player:SetPData( "wblmoney", maxmonz )
+			cur = maxmonz
+		else
+			player:SetPData( "wblmoney", cur ) 
+		end
+		player:SetPData("wblmoneyOld",cur)
+		local diff = cur - old
+		if (diff > 0) and (cur <= maxmonz) then
+			wblDebug("Executed 1")
+			net.Start("plyMonzupdateToC")
+			net.WriteInt(cur, 32)
+			net.WriteInt(diff, 32)
+			net.Send(player)
+		elseif diff < 0 then
+			wblDebug("Executed 2")
+			amount = (amount)*(-1)
+			net.Start("plyMonzupdateToCLose")
+			net.WriteInt(cur, 32)
+			net.WriteInt(diff, 32)
+			net.Send(player)
+		end
+	end
+end
 
 --enable getting of money and money hud
 wblmonhen = CreateConVar( "wblmoney_enable", 1, FCVAR_NONE, "1", 0, 1 ) 
@@ -75,6 +112,8 @@ cvars.AddChangeCallback("wblmoney_enable", function(convar_name, old_value, new_
 		
 end)
 
+
+
 --for Debug
 wblmonDebug = CreateConVar( "wblmoney_Debug", 0, FCVAR_NONE, "0", 0, 1 )
 
@@ -113,6 +152,18 @@ cvars.AddChangeCallback("wblmoney_money_start", function(convar_name, old_value,
 	local monmax = tonumber(wblmonmax:GetInt())
 	if tonumber(new_value) > tonumber(monmax) then
 		RunConsoleCommand("wblmoney_money_max", new_value)
+	end
+end)
+
+CreateConVar("wblmoney_sync_user",-1,FCVAR_NONE,"DO NOT USE THIS UNLESS YOU KNOW WHAT YOU ARE DOING. Refreshes Player ID's money. Used for external hooks.",-1,math.huge)
+
+-- cvar to allow cvar-change of money on a client
+cvars.addchangeCallback("wblmoney_sync_user",function(convar_name,old,new)
+	if new == -1 then return end
+	RunConsoleCommand("wblmoney_sync_user",-1)
+	local ply = Player(new)
+	if ply then
+		changeMoney(ply,0)
 	end
 end)
 
@@ -1264,19 +1315,8 @@ function wblgivemoneydynamichealth(plykiller,addvalue,npc)
 				local plycoop = tonumber(wblmonplycoop:GetInt())
 				if plycoop == 0 then
 					--function to give money to single player
+					changeMoney(plykiller,math.ceil(mnygiven))
 					local wblmoney = (plykiller:GetPData("wblmoney",-1))
-					wblmoney = wblmoney + mnygiven
-					wblmoney = math.ceil( wblmoney )
-					local maxmonz = tonumber(wblmonmax:GetInt())
-					if wblmoney < 0 then
-						plykiller:SetPData( "wblmoney", 0 ) 
-						wblmoney = 0
-					elseif wblmoney > maxmonz then
-						plykiller:SetPData( "wblmoney", maxmonz )
-						wblmoney = maxmonz
-					else
-						plykiller:SetPData( "wblmoney", wblmoney ) 
-					end
 					wblDebug("Money given: "..mnygiven)
 					wblDebug("Money of: "..tostring(plykiller)..": "..tostring(wblmoney))
 					wblDebug("NPC Relationship to killer: "..npcRel)
@@ -1284,20 +1324,6 @@ function wblgivemoneydynamichealth(plykiller,addvalue,npc)
 					wblDebug("mnygiven"..mnygiven)
 					wblDebug("wblmoney"..wblmoney)
 					wblDebug("Maxmonz"..maxmonz)
-					if (mnygiven > 0) and (wblmoney <= maxmonz) then
-						wblDebug("Executed 1")
-						net.Start("plyMonzupdateToC")
-						net.WriteInt(wblmoney, 32)
-						net.WriteInt(mnygiven, 32)
-						net.Send(plykiller)	--plykiller
-					elseif mnygiven < 0 then
-						wblDebug("Executed 2")
-						mnygiven = (mnygiven)*(-1)
-						net.Start("plyMonzupdateToCLose")
-						net.WriteInt(wblmoney, 32)
-						net.WriteInt(mnygiven, 32)
-						net.Send(plykiller)	
-					end
 				else
 					--function to give divided money to all players
 					local humanCount = 0
@@ -1307,37 +1333,12 @@ function wblgivemoneydynamichealth(plykiller,addvalue,npc)
 					    end
 					end
 					for k, v in pairs(player.GetAll()) do
-
-					    local wblmoney = (v:GetPData("wblmoney",-1))
-					    local divmnygiven = math.ceil(mnygiven/humanCount)
-						wblmoney = wblmoney + divmnygiven
-						wblmoney = math.ceil( wblmoney )
-						local maxmonz = wblmonmax:GetInt()
-						if wblmoney < 0 then
-							v:SetPData( "wblmoney", 0 ) 
-							wblmoney = 0
-						elseif wblmoney > maxmonz then
-							v:SetPData( "wblmoney", maxmonz )
-							wblmoney = maxmonz
-						else
-							v:SetPData( "wblmoney", wblmoney ) 
-						end
-						wblDebug("Money given: "..divmnygiven)
+						changeMoney(player,math.ceil(mnygiven/humanCount))
+						local wblmoney = (plykiller:GetPData("wblmoney",-1))
+						wblDebug("Money given: "..amount/humanCount)
 						wblDebug("Money of: "..tostring(v)..": "..tostring(wblmoney))
 						wblDebug("NPC Relationship to killer: "..npcRel)
 						wblDebug("////////////////////////////////")
-						if (divmnygiven > 0) and (wblmoney <= maxmonz) then
-							net.Start("plyMonzupdateToC")
-							net.WriteInt(wblmoney, 32)
-							net.WriteInt(divmnygiven, 32)
-							net.Send(v)	--plykiller
-						elseif divmnygiven < 0 then
-							divmnygiven = (divmnygiven)*(-1)
-							net.Start("plyMonzupdateToCLose")
-							net.WriteInt(wblmoney, 32)
-							net.WriteInt(divmnygiven, 32)
-							net.Send(v)	
-						end
 					end
 				end
 			end
@@ -1902,27 +1903,17 @@ hook.Add("PlayerDeath", "HandlePlayerDeath", function(victim, inflictor, attacke
 	local lossen = tonumber(wblmonlosen:GetInt())
 	local monen = tonumber(wblmonhen:GetInt())
 	if monen == 0 then return end
-    if (victim:IsPlayer() and victim:IsValid()) and lossen == 1 then
-	    local wblmoney = tonumber(victim:GetPData("wblmoney",-1))
-	    local lossmethod = tonumber(wblmonlosmet:GetInt())
-	    if lossmethod == 1 then
-	    	local lossfix = tonumber(wblmonlosfix:GetInt())
-	    	mnygiven = lossfix
+	if (victim:IsPlayer() and victim:IsValid()) and lossen == 1 then
+		local wblmoney = tonumber(victim:GetPData("wblmoney",-1))
+		local lossmethod = tonumber(wblmonlosmet:GetInt())
+		if lossmethod == 1 then
+	    		local lossfix = tonumber(wblmonlosfix:GetInt())
+	    		mnygiven = lossfix
 		elseif lossmethod == 2 then
 			local lossperc = tonumber(wblmonlospercent:GetInt())
 			mnygiven = (wblmoney)*(lossperc/100)
 		end
-
-		if mnygiven > wblmoney then
-			wblmoney = 0
-		else
-			wblmoney = wblmoney - mnygiven
-		end
-		victim:SetPData( "wblmoney", wblmoney )
-	    net.Start("plyMonzupdateToCLose")
-		net.WriteInt(wblmoney, 32)
-		net.WriteInt(mnygiven, 32)
-		net.Send(victim)
+		changeMoney(victim,math.ceil(-mnygiven))
 	end	
 	
 	--for money gain on player kill
@@ -1933,19 +1924,7 @@ hook.Add("PlayerDeath", "HandlePlayerDeath", function(victim, inflictor, attacke
 		local plyvalue = tonumber(wblmonplyvalue:GetInt())
 		wblmoney = wblmoney + plyvalue
 		local maxmonz = wblmonmax:GetInt()
-		if wblmoney < 0 then
-			attacker:SetPData( "wblmoney", 0 ) 
-			wblmoney = 0
-		elseif wblmoney > maxmonz then
-			attacker:SetPData( "wblmoney", maxmonz )
-			wblmoney = maxmonz
-		else
-			attacker:SetPData( "wblmoney", wblmoney ) 
-		end
-		net.Start("plyMonzupdateToC")
-		net.WriteInt(wblmoney,32)
-		net.WriteInt(plyvalue,32)
-		net.Send(attacker)
+		changeMoney(attacker,math.ceil(plyvalue))
 	end
 
 end)
