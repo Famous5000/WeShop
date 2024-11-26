@@ -2256,7 +2256,7 @@ net.Receive("wblplyboughtfullsecammo", function(len, ply)
 		else
 			net.Start("wblplynomoney")
 			net.Send(ply)
-			net.Start("Lose")
+			net.Start("plyMonzupdateToCLose")
 			net.WriteInt(wblmoney, 32)
 			net.Send(ply)
 		end
