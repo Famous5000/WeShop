@@ -117,6 +117,44 @@ wblBuying = false
 -- for Debugging (START) --
 
 -- for Debugging (END) --
+
+function changeMoney(player,amount)
+	if amount == 0 then -- called via sync_user, which isn't handled here
+		error("This should not have happened in this context! Please report this to Famous5000 immediately.")
+	else -- not called via sync_user, time to handle money.
+		local old = player:GetPData("wblmoneyOld",player:GetPData("wblmoney",-1))
+		local cur = player:GetPData("wblmoney",-1)
+		cur = cur + amount
+		cur = math.ceil( cur )
+		local maxmonz = tonumber(wblmonmax:GetInt())
+		if cur < 0 then
+			player:SetPData( "wblmoney", 0 ) 
+			cur = 0
+		elseif cur > maxmonz then
+			player:SetPData( "wblmoney", maxmonz )
+			cur = maxmonz
+		else
+			player:SetPData( "wblmoney", cur ) 
+		end
+		player:SetPData("wblmoneyOld",cur)
+		local diff = cur - old
+		if (diff > 0) and (cur <= maxmonz) then
+			wblDebug("Executed 1")
+			net.Start("plyMonzupdateToC")
+			net.WriteInt(cur, 32)
+			net.WriteInt(diff, 32)
+			net.Send(player)
+		elseif diff < 0 then
+			wblDebug("Executed 2")
+			amount = (amount)*(-1)
+			net.Start("plyMonzupdateToCLose")
+			net.WriteInt(cur, 32)
+			net.WriteInt(diff, 32)
+			net.Send(player)
+		end
+	end
+end
+
 --[[
 local wblweaponlist = {
     {
@@ -1520,15 +1558,8 @@ local function Moneydeduct(ply, cost, seen)
 			--surface.PlaySound("buttons/button10.wav")
     		return false
     	else
-    		wblmoney = wblmoney - price
-		    ply:SetPData( "wblmoney", wblmoney )
-		    if seen then
-			    net.Start("plyMonzupdateToCLose")
-				net.WriteInt(wblmoney, 32)
-				net.WriteInt(price, 32)
-				net.Send(ply)
-			end
-			return true
+    		changeMoney(ply,-cost)
+		return true
     	end
     else
     	return true
@@ -1544,24 +1575,7 @@ local function Moneyadd(ply, add, seen)
     wblmoney = tonumber(wblmoney)
     local monen = wblmonhen:GetInt()
     if monen == 1 then
-    	local maxmonz = wblmonmax:GetInt()
-    	wblmoney = wblmoney + price
-		wblmoney = math.ceil( wblmoney )
-		if wblmoney < 0 then
-			ply:SetPData( "wblmoney", 0 ) 
-			wblmoney = 0
-		elseif wblmoney > maxmonz then
-			ply:SetPData( "wblmoney", maxmonz )
-			wblmoney = maxmonz
-		else
-			ply:SetPData( "wblmoney", wblmoney ) 
-		end
-		if seen then
-			net.Start("plyMonzupdateToC")
-			net.WriteInt(wblmoney, 32)
-			net.WriteInt(price, 32)
-			net.Send(ply)	
-		end
+    		changeMoney(ply,price)
     else
     	return true
     end  
@@ -1631,8 +1645,7 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
 		    		-- Give the player the weapon
 		    	
 			
-		    		wblmoney = wblmoney - weaponprice
-		    		ply:SetPData( "wblmoney", wblmoney )
+		    		changeMoney(ply,-weaponprice)
                     local ammohasbeengiven = true
 		    		if arsenal == "C" then
                         wblDebug("Weapon is ArsenalAAAAAAAAAAAAAAAAA")
@@ -1675,10 +1688,6 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
 		    			--ply:Give(weaponClass)
                     elseif arsenal == "ENT" then
                         SpawnWeapononme(ply, weaponClass)
-                        net.Start("plyMonzupdateToCLose")
-                        net.WriteInt(wblmoney, 32)
-                        net.WriteInt(weaponprice, 32)
-                        net.Send(ply)
                         net.Start("wblplyboughtweapon")
                         net.WriteUInt(2,8)
                         net.Send(ply)
@@ -1689,10 +1698,6 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
 		    			return
 		    		end
 				    ply:SelectWeapon(weaponClass)
-				    net.Start("plyMonzupdateToCLose")
-					net.WriteInt(wblmoney, 32)
-					net.WriteInt(weaponprice, 32)
-					net.Send(ply)	
                     --timer.Simple(0.2, function()
                     --    wblDebug("Ammo given: "..tostring(ammohasbeengiven))
                     --    if not ammohasbeengiven then
@@ -1884,15 +1889,10 @@ local function GiveHP(ply, HPamount, HPprice)
 	    	else
 		    		-- Give the player the weapon
 		    	net.Start("wblplyboughthpsound")
-				net.Send(ply)
+			net.Send(ply)
 			
-		    		wblmoney = wblmoney - HPprice
-		    		ply:SetPData( "wblmoney", wblmoney )
-				    net.Start("plyMonzupdateToCLose")
-					net.WriteInt(wblmoney, 32)
-					net.WriteInt(HPprice, 32)
-					net.Send(ply)	
-					return HPamount
+		    	changeMoney(ply,-HPprice)	
+			return HPamount
 	    	end
 	    else
 	    	net.Start("wblplyboughthpsound")
@@ -1926,12 +1926,7 @@ local function GiveAP(ply, APamount, APprice)
 		    	net.Start("wblplyboughtapsound")
 				net.Send(ply)
 			
-		    		wblmoney = wblmoney - APprice
-		    		ply:SetPData( "wblmoney", wblmoney )
-				    net.Start("plyMonzupdateToCLose")
-					net.WriteInt(wblmoney, 32)
-					net.WriteInt(APprice, 32)
-					net.Send(ply)	
+		    		changeMoney(ply,-APprice)
 					return APamount
 	    	end
 	    else
