@@ -119,8 +119,27 @@ wblBuying = false
 -- for Debugging (END) --
 
 function changeMoney(player,amount)
-	if amount == 0 then -- called via sync_user, which isn't handled here
-		error("This should not have happened in this context! Please report this to Famous5000 immediately.")
+	if amount == 0 then -- called via sync_user, which really shouldn't happen in this context but it does so anyways so AAAAAAAAAAAAAAAAAAAAA
+		local old = player:GetPData("wblmoneyOld",player:GetPData("wblmoney",-1))
+		local cur = player:GetPData("wblmoney",-1)
+		if old == -1 then
+			warn("Someone's old *and* current money was corrupted. Ignoring!")
+		elseif old == cur then
+			warn("Old data was corrupted, or nothing changed. Re-syncing old data just in case.")
+			player:SetPData("wblmoneyOld",old)
+		else -- the intentional bit.
+			if old < cur then
+				net.Start("plyMonzupdateToC")
+				net.WriteInt(new, 32)
+				net.WriteInt(new-old, 32)
+				net.Send(player)
+			else
+				net.Start("plyMonzupdateToCLose")
+				net.WriteInt(new, 32)
+				net.WriteInt(old-new, 32)
+				net.Send(player)
+			end
+		end
 	else -- not called via sync_user, time to handle money.
 		local old = player:GetPData("wblmoneyOld",player:GetPData("wblmoney",-1))
 		local cur = player:GetPData("wblmoney",-1)
