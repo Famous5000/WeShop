@@ -158,7 +158,7 @@ end)
 CreateConVar("wblmoney_sync_user",-1,FCVAR_NONE,"DO NOT USE THIS UNLESS YOU KNOW WHAT YOU ARE DOING. Refreshes Player ID's money. Used for external hooks.",-1,math.huge)
 
 -- cvar to allow cvar-change of money on a client
-cvars.addchangeCallback("wblmoney_sync_user",function(convar_name,old,new)
+cvars.AddChangeCallback("wblmoney_sync_user",function(convar_name,old,new)
 	if new == -1 then return end
 	RunConsoleCommand("wblmoney_sync_user",-1)
 	local ply = Player(new)
