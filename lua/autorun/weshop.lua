@@ -19,9 +19,9 @@ function changeMoney(player,amount)
 		local old = player:GetPData("wblmoneyOld",player:GetPData("wblmoney",-1))
 		local cur = player:GetPData("wblmoney",-1)
 		if old == -1 then
-			warn("Someone's old *and* current money was corrupted. Ignoring!")
+			print("Someone's old *and* current money was corrupted. Ignoring!")
 		elseif old == cur then
-			warn("Old data was corrupted, or nothing changed. Re-syncing old data just in case.")
+			print("Old data was corrupted, or nothing changed. Re-syncing old data just in case.")
 			player:SetPData("wblmoneyOld",old)
 		else -- the intentional bit.
 			if old < cur then
