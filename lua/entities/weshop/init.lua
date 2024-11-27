@@ -130,13 +130,13 @@ function changeMoney(player,amount)
 		else -- the intentional bit.
 			if old < cur then
 				net.Start("plyMonzupdateToC")
-				net.WriteInt(new, 32)
-				net.WriteInt(new-old, 32)
+				net.WriteInt(cur, 32)
+				net.WriteInt(cur-old, 32)
 				net.Send(player)
 			else
 				net.Start("plyMonzupdateToCLose")
-				net.WriteInt(new, 32)
-				net.WriteInt(old-new, 32)
+				net.WriteInt(cur, 32)
+				net.WriteInt(old-cur, 32)
 				net.Send(player)
 			end
 		end
