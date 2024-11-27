@@ -35,6 +35,7 @@ function changeMoney(player,amount)
 				net.WriteInt(old-cur, 32)
 				net.Send(player)
 			end
+			player:SetPData("wblmoneyOld",old)
 		end
 	else -- not called via sync_user, time to handle money.
 		local old = player:GetPData("wblmoneyOld",player:GetPData("wblmoney",-1))
