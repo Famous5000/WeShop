@@ -1340,7 +1340,6 @@ function wblgivemoneydynamichealth(plykiller,addvalue,npc)
 					wblDebug("////////////////////////////////")
 					wblDebug("mnygiven"..mnygiven)
 					wblDebug("wblmoney"..wblmoney)
-					wblDebug("Maxmonz"..maxmonz)
 				else
 					--function to give divided money to all players
 					local humanCount = 0
@@ -1940,7 +1939,6 @@ hook.Add("PlayerDeath", "HandlePlayerDeath", function(victim, inflictor, attacke
 		local wblmoney = tonumber((attacker:GetPData("wblmoney",-1)))
 		local plyvalue = tonumber(wblmonplyvalue:GetInt())
 		wblmoney = wblmoney + plyvalue
-		local maxmonz = wblmonmax:GetInt()
 		changeMoney(attacker,math.ceil(plyvalue))
 	end
 
