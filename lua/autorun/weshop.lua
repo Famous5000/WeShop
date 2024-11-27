@@ -70,6 +70,22 @@ function changeMoney(player,amount)
 	end
 end
 
+-- auto timer system to update clients every 0.25 seconds if the addons themselves don't properly update the user.
+-- function to check each player's data and compare with the old value
+local function checkPlayerMoneyData()
+    for _, player in ipairs(player.GetAll()) do
+        -- fetch the current and old data for the player, compare if the two are different, then forcefully update players if it is.
+        local currentMoney = player:GetPData("wblmoney",-1)
+        local oldMoney = player:GetPData("wblmoneyOld",-1)
+        if currentMoney ~= oldMoney then
+            changeMoney(player, 0)
+        end
+    end
+end
+
+-- timer for scanning for money changes
+timer.Create("PlayerMoneyCheck", 0.25, 0, checkPlayerMoneyData)
+
 --enable getting of money and money hud
 wblmonhen = CreateConVar( "wblmoney_enable", 1, FCVAR_NONE, "1", 0, 1 ) 
 
