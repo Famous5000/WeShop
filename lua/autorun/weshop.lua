@@ -1350,7 +1350,7 @@ function wblgivemoneydynamichealth(plykiller,addvalue,npc)
 					for k, v in pairs(player.GetAll()) do
 						changeMoney(v,math.ceil(mnygiven/humanCount))
 						local wblmoney = (plykiller:GetPData("wblmoney",-1))
-						wblDebug("Money given: "..amount/humanCount)
+						wblDebug("Money given: "..math.ceil(mnygiven/humanCount))
 						wblDebug("Money of: "..tostring(v)..": "..tostring(wblmoney))
 						wblDebug("NPC Relationship to killer: "..npcRel)
 						wblDebug("////////////////////////////////")
