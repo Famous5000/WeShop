@@ -1349,7 +1349,7 @@ function wblgivemoneydynamichealth(plykiller,addvalue,npc)
 					    end
 					end
 					for k, v in pairs(player.GetAll()) do
-						changeMoney(player,math.ceil(mnygiven/humanCount))
+						changeMoney(v,math.ceil(mnygiven/humanCount))
 						local wblmoney = (plykiller:GetPData("wblmoney",-1))
 						wblDebug("Money given: "..amount/humanCount)
 						wblDebug("Money of: "..tostring(v)..": "..tostring(wblmoney))
