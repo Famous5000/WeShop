@@ -57,10 +57,6 @@ function ENT:HandleInteraction(ply)
 		else
 			ply:SetPData( "wblmoney", wblmoney ) 
 		end
-		net.Start("plyMonzupdateToC")
-		net.WriteInt(wblmoney,32)
-		net.WriteInt(entvalue,32)
-		net.Send(ply)
     else
         local humanCount = 0
         for _, plyy in pairs(player.GetAll()) do
@@ -85,10 +81,6 @@ function ENT:HandleInteraction(ply)
                 else
                     plyyer:SetPData( "wblmoney", wblmoney ) 
                 end
-                net.Start("plyMonzupdateToC")
-                net.WriteInt(wblmoney,32)
-                net.WriteInt(entvalue/humanCount,32)
-                net.Send(plyyer)
             end
         end
 
