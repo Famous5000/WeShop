@@ -32,7 +32,7 @@ function changeMoney(player,amount)
 			else
 				net.Start("plyMonzupdateToCLose")
 				net.WriteInt(cur, 32)
-				net.WriteInt(old-cur, 32)
+				net.WriteInt(cur-old, 32)
 				net.Send(player)
 			end
 			player:SetPData("wblmoneyOld",cur)
@@ -62,10 +62,9 @@ function changeMoney(player,amount)
 			net.Send(player)
 		elseif diff < 0 then
 			wblDebug("Executed 2")
-			amount = (amount)*(-1)
 			net.Start("plyMonzupdateToCLose")
 			net.WriteInt(cur, 32)
-			net.WriteInt(diff, 32)
+			net.WriteInt(-diff, 32)
 			net.Send(player)
 		end
 	end
@@ -1349,7 +1348,7 @@ function wblgivemoneydynamichealth(plykiller,addvalue,npc)
 					    end
 					end
 					for k, v in pairs(player.GetAll()) do
-						changeMoney(player,math.ceil(mnygiven/humanCount))
+						changeMoney(v,math.ceil(mnygiven/humanCount))
 						local wblmoney = (plykiller:GetPData("wblmoney",-1))
 						wblDebug("Money given: "..amount/humanCount)
 						wblDebug("Money of: "..tostring(v)..": "..tostring(wblmoney))
