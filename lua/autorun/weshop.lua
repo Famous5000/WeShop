@@ -1148,7 +1148,7 @@ function wblfnlmoney(addvalue,npcc)
 		if not npcc:IsValid() then return 0 end
         local npcclass = tostring(npcc:GetClass())
 		wblDebug("NPC Class from server: "..npcclass)
-        if npcclass == "npc_bullseye" then return 50 end
+        if npcclass == "npc_bullseye" then return 0 end
 		local npcmodel = tostring(npcc:GetModel())
 		wblDebug("NPC Model from server: "..npcmodel)
 		local npcmaterial = tostring(npcc:GetMaterial())
