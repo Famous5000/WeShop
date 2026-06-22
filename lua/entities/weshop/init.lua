@@ -1560,7 +1560,7 @@ local function AddReserveAmmo(plyer, ammoType, amountToAdd)
     end
 end
 
-local function Moneydeduct(ply, cost, seen)
+function Moneydeduct(ply, cost, seen)
 	local monen = wblmonhen:GetInt()
 	local wblmoney = ply:GetPData("wblmoney",-1)
 	price = tonumber(cost)
@@ -1587,7 +1587,7 @@ end
 
 
 
-local function Moneyadd(ply, add, seen)
+function Moneyadd(ply, add, seen)
 	local monen = wblmonhen:GetInt()
 	local wblmoney = ply:GetPData("wblmoney",-1)
 	price = tonumber(add)
@@ -1977,312 +1977,425 @@ function CompressAndSendTable(netString, dataTable, ply)
 end
 
 
+-- Toggle for the anti-tamper honeypot/ban. Admins can disable the auto-ban
+-- entirely with `weshop_buy_antitamper 0` (it still ignores the spoofed price
+-- and charges the real cost; it just won't trap-and-ban).
+CreateConVar("weshop_buy_antitamper", "1", FCVAR_ARCHIVE, "WeShop: trap & ban clients that tamper with the buy net message (1) or just ignore the spoofed price (0).")
+
+-- Match a buy CLAIM (class + price off the wire) against the live catalogue.
+-- We compare on the (class, cost) PAIR, not class alone, because several
+-- catalogue entries can share one weapon class at different prices (e.g. the
+-- Grenade Mk1-7 all use weapon_rtbr_frag). Returns the matching entry, or nil
+-- when no legit entry sells that class at that price -> tampered message.
+local function WblMatchPurchase(class, price)
+	price = tonumber(price)
+	if not (class and price) then return nil end
+	for _, tier in ipairs(wblweaponlist) do
+		for _, weapon in ipairs(tier.weapons or {}) do
+			if weapon.class == class and tonumber(weapon.cost) == price then
+				return weapon
+			end
+		end
+	end
+	return nil
+end
+
+-- Issue the permaban. Routed through ULib (ULX) when present so the ban lands
+-- in ULX's ban list and an admin can lift it via `ulx unban` / XGUI; falls
+-- back to the engine ban (banned_user.cfg) on servers without ULX.
+local function WblBanTamperer(ply, sid, name, reason)
+	if ULib and ULib.ban and IsValid(ply) then
+		ULib.ban(ply, 0, reason, nil) -- 0 minutes = permanent, nil admin = console
+	elseif ULib and ULib.addBan then
+		ULib.addBan(sid, 0, reason, name, nil)
+	else
+		if IsValid(ply) then ply:Ban(0, true) end -- 0 = permanent, kick
+		RunConsoleCommand("banid", "0", sid, "kick")
+		RunConsoleCommand("writeid")
+	end
+end
+
+-- Honeypot: let the spoof appear to work for a few seconds, then permaban.
+local function WblTrapTamperer(ply, class, sentPrice)
+	if not (IsValid(ply) and ply:IsPlayer()) then return end
+	if ply.WblTrapped then return end -- one trip per session is plenty
+	ply.WblTrapped = true
+
+	local sid   = ply:SteamID()
+	local name  = ply:Nick()
+	local delay = math.random(5, 10)
+
+	-- Snapshot the real balance BEFORE the spoof "succeeds" so we can restore it
+	-- exactly at ban time. (changeMoney clamps to [0,max], so reverting via an
+	-- inverse delta wouldn't be exact under clamping; a snapshot always is.)
+	local before = ply:GetPData("wblmoney", -1)
+
+	-- Make it look like it worked: actually give the weapon and apply the
+	-- spoofed price. changeMoney caps gains at wblmonmax, so the live window is
+	-- bounded, and the restore below zeroes it out regardless.
+	local found = FindWeaponByClass(class)
+	GivePlayerWeapon(ply, class, sentPrice, found and found.Arsenaltype or "W")
+
+	MsgN(string.format("[WeShop] buy net-message TAMPER from %s <%s>: claimed price %s for '%s'. Permaban in %ds.",
+		name, sid, tostring(sentPrice), tostring(class), delay))
+
+	timer.Simple(delay, function()
+		if IsValid(ply) then
+			ply:SetPData("wblmoney", before)      -- roll back any ill-gotten gains
+			ply:SetPData("wblmoneyOld", before)
+		end
+		WblBanTamperer(ply, sid, name, "WeShop: tampering with the weapon-buy net message (price spoofing)")
+	end)
+end
+
 --for Buying Weapons
 net.Receive("wblBuyweapon", function(len, ply)
 	local price = net.ReadInt(32)
 	local weaponclass = net.ReadString()
-	local arsenaltype = net.ReadString()
-	wblDebug("Arsenaltype received from server: "..arsenaltype)
-	GivePlayerWeapon(ply, weaponclass, price, arsenaltype)
+	local arsenaltype = net.ReadString() -- read to drain the message; NOT trusted
+
+	-- The wire still carries the price (protocol unchanged), but the server now
+	-- treats it as a CLAIM to verify, never as authority. A genuine client
+	-- always echoes a real catalogue cost for the class it's buying.
+	local match = WblMatchPurchase(weaponclass, price)
+	if match then
+		-- Legit: charge the verified server-side cost & arsenal, never the wire.
+		wblDebug("Arsenaltype received from server: "..tostring(match.Arsenaltype))
+		GivePlayerWeapon(ply, weaponclass, match.cost, match.Arsenaltype)
+		return
+	end
+
+	-- No catalogue entry sells this (class, price): tampered net message
+	-- (negative "free money", arbitrary underpay, or bogus class).
+	if GetConVar("weshop_buy_antitamper"):GetBool() then
+		WblTrapTamperer(ply, weaponclass, price)
+	end
+	-- antitamper off: silently ignore the spoof, grant nothing.
 end)
 
 --for Buying 1 Primary Ammo
 net.Receive("wblplybought1primeammo", function(len, ply)
-	local price = net.ReadInt(32)
-	local weapon = ply:GetActiveWeapon()
-	if not (IsValid(weapon) and weapon:GetClass() ~= "none") then 
-    	net.Start("wblNoWeaponsound")
-	    net.Send(ply)
-     	return 
- 	end
-	local weaponclass = weapon:GetClass()
-	local foundWeapon = FindWeaponByClass(weaponclass)
-    wblDebug("foundWeapon Name: "..foundWeapon.name)
-    wblDebug("foundWeapon Name: "..foundWeapon.ammo1)
-    wblDebug("foundWeapon Name: "..foundWeapon.ammo2)
-    -- Check if weapon is listed in the shop
-	if foundWeapon == nil then
-		net.Start("wblplydontknowweaponsound")
-		net.Send(ply)
-		return
+    local price = net.ReadInt(32)
+    local weapon = ply:GetActiveWeapon()
+    if not (IsValid(weapon) and weapon:GetClass() ~= "none") then 
+        net.Start("wblNoWeaponsound")
+        net.Send(ply)
+        return 
+    end
 
-    -- Check if it is equpment or weapon has N.A. Primary ammo
+    local weaponclass = weapon:GetClass()
+    local foundWeapon = FindWeaponByClass(weaponclass)
+    
+
+    -- Check if weapon is listed in the shop
+    if foundWeapon == nil then
+        net.Start("wblplydontknowweaponsound")
+        net.Send(ply)
+        return
+
+    -- Check if it is equipment or weapon has N.A. Primary ammo
     elseif foundWeapon.Arsenaltype == "C" then
         net.Start("wblplynoammotypesoundC")
         net.WriteInt(1,16)
         net.Send(ply)
         return
-	elseif foundWeapon.ammo1 == "N.A." then
-
-		net.Start("wblplynoammotypesound")
-		net.WriteInt(1,16)
-		net.Send(ply)
-		return
-	end
-
-	local ammo = FindAmmoByName(foundWeapon.ammo1)
-
-    -- Check if ammo of weapon is listed
-	if ammo == nil then
-        wblDebug("ammo is nil!")
-		net.Start("wblbutton1soundother")
+    elseif foundWeapon.ammo1 == "N.A." then
+        net.Start("wblplynoammotypesound")
         net.WriteInt(1,16)
         net.Send(ply)
         return
-	end
+    end
 
-	local currentammo = ply:GetAmmoCount(ammo.class)
-	if currentammo < ammo.maxquantity then
-		local ammodiff = ammo.maxquantity - currentammo
-		if Moneydeduct(ply, ammo.price, true) then
-			local plyammo = ply:GetAmmoCount(ammo.class)
-			if ammodiff >= ammo.quantity then
-				AddReserveAmmo(ply, ammo.class, ammo.quantity)
-			else
-				SetReserveAmmo(ply, ammo.class, ammo.maxquantity)
-			end
-			if remammo1 ~= ply:GetAmmoCount(ammo.class) then
-				net.Start("wblplyboughtpasound")
-				net.Send(ply)
-				remammo1 = ply:GetAmmoCount(ammo.class)
-				remweapon = ply:GetActiveWeapon()
-			elseif (remammo1 == plyammo) and (remweapon == ply:GetActiveWeapon()) then
-				net.Start("wblplyhasmaxprimeammo")
-				net.Send(ply)
-				Moneyadd(ply, ammo.price, true)
-				wblDebug("Weapon has its own reserve ammo set, it is overriding my settings!, will follow SWEPs rule!")
-			end
-		end
-	else
-		net.Start("wblplyhasmaxprimeammo")
-		net.Send(ply)
-	end
+    wblDebug("foundWeapon Name: " .. foundWeapon.name)
+    wblDebug("foundWeapon ammo1: " .. foundWeapon.ammo1)
+    wblDebug("foundWeapon ammo2: " .. foundWeapon.ammo2)
+
+    local ammo = FindAmmoByName(foundWeapon.ammo1)
+
+    -- Check if ammo of weapon is listed
+    if ammo == nil then
+        wblDebug("ammo is nil!")
+        net.Start("wblbutton1soundother")
+        net.WriteInt(1,16)
+        net.Send(ply)
+        return
+    end
+
+    -- Bypass max if convar is set
+    local bypassammomax = 9999
+    local ammocap = (GetConVar("wblmoney_noammocaponbuy"):GetBool() and GetConVar("wblmoney_noammocaprestriction"):GetBool()) and bypassammomax or ammo.maxquantity
+
+    local currentammo = ply:GetAmmoCount(ammo.class)
+    if currentammo < ammocap then
+        local ammodiff = ammocap - currentammo
+        if Moneydeduct(ply, ammo.price, true) then
+            local plyammo = ply:GetAmmoCount(ammo.class)
+            if ammodiff >= ammo.quantity then
+                AddReserveAmmo(ply, ammo.class, ammo.quantity)
+            else
+                SetReserveAmmo(ply, ammo.class, ammocap)
+            end
+            if remammo1 ~= ply:GetAmmoCount(ammo.class) then
+                net.Start("wblplyboughtpasound")
+                net.Send(ply)
+                remammo1 = ply:GetAmmoCount(ammo.class)
+                remweapon = ply:GetActiveWeapon()
+            elseif (remammo1 == plyammo) and (remweapon == ply:GetActiveWeapon()) then
+                net.Start("wblplyhasmaxprimeammo")
+                net.Send(ply)
+                Moneyadd(ply, ammo.price, true)
+                wblDebug("Weapon has its own reserve ammo set, it is overriding my settings!, will follow SWEPs rule!")
+            end
+        end
+    else
+        net.Start("wblplyhasmaxprimeammo")
+        net.Send(ply)
+    end
 end)
 
 --for Buying All Primary Ammo
 net.Receive("wblplyboughtfullprimeammo", function(len, ply)
-	local price = net.ReadInt(32)
-	local weapon = ply:GetActiveWeapon()
-	if not (IsValid(weapon) and weapon:GetClass() ~= "none") then 
-    	net.Start("wblNoWeaponsound")
-	    net.Send(ply)
-     	return 
- 	end
-	local weaponclass = weapon:GetClass()
-	local foundWeapon = FindWeaponByClass(weaponclass)
-	if foundWeapon == nil then
-		net.Start("wblplydontknowweaponsound")
-		net.Send(ply)
-		return
+    local price = net.ReadInt(32)
+    local weapon = ply:GetActiveWeapon()
+    if not (IsValid(weapon) and weapon:GetClass() ~= "none") then 
+        net.Start("wblNoWeaponsound")
+        net.Send(ply)
+        return 
+    end
+
+    local weaponclass = weapon:GetClass()
+    local foundWeapon = FindWeaponByClass(weaponclass)
+    if foundWeapon == nil then
+        net.Start("wblplydontknowweaponsound")
+        net.Send(ply)
+        return
     elseif foundWeapon.Arsenaltype == "C" then
         net.Start("wblplynoammotypesoundC")
         net.WriteInt(1,16)
         net.Send(ply)
         return
-	elseif foundWeapon.ammo1 == "N.A." then
-		net.Start("wblplynoammotypesound")
-		net.WriteInt(1,16)
-		net.Send(ply)
-		return
-	end
-	local ammo = FindAmmoByName(foundWeapon.ammo1)
+    elseif foundWeapon.ammo1 == "N.A." then
+        net.Start("wblplynoammotypesound")
+        net.WriteInt(1,16)
+        net.Send(ply)
+        return
+    end
+
+    local ammo = FindAmmoByName(foundWeapon.ammo1)
     if ammo == nil then
         net.Start("wblbutton1soundother")
         net.WriteInt(1,16)
         net.Send(ply)
         return
     end
-	local currentammo = ply:GetAmmoCount(ammo.class)
-	if currentammo < ammo.maxquantity then
-		local ammodiff = ammo.maxquantity - currentammo
-		local buymult = math.ceil(ammodiff/ammo.quantity)
-		local wblmoney = ply:GetPData("wblmoney",-1)
-		if tonumber(wblmoney) >= ammo.price then
-			for i = 1, buymult do
-				local wblmoney = ply:GetPData("wblmoney",-1)
-				ammodiff = ammo.maxquantity - currentammo
-				if tonumber(wblmoney) >= ammo.price then
-						if Moneydeduct(ply, ammo.price, true) then
-							local plyammo = ply:GetAmmoCount(ammo.class)
-							if ammodiff >= ammo.quantity then
-								AddReserveAmmo(ply, ammo.class, ammo.quantity)
-							else
-								SetReserveAmmo(ply, ammo.class, ammo.maxquantity)
-							end
-							if remammo1 ~= ply:GetAmmoCount(ammo.class) then
-								net.Start("wblplyboughtpasound")
-								net.Send(ply)
-								remammo1 = ply:GetAmmoCount(ammo.class)
-								remweapon = ply:GetActiveWeapon()
-							elseif (remammo1 == plyammo) and (remweapon == ply:GetActiveWeapon()) then
-								net.Start("wblplyhasmaxprimeammo")
-								net.Send(ply)
-								Moneyadd(ply, ammo.price, true)
-								wblDebug("Weapon has its own reserve ammo set, it is overriding my settings!, will follow SWEPs rule!")
-								break
-							end
-						end
-				else
-	
-					break
-				end
-			end
-		else
-			net.Start("wblplynomoney")
-			net.Send(ply)
-			net.Start("plyMonzupdateToCLose")
-			net.WriteInt(wblmoney, 32)
-			net.Send(ply)
-		end
-	else
-		net.Start("wblplyhasmaxprimeammo")
-		net.Send(ply)
-	end
+
+    -- Bypass max if convar is set
+    local bypassammomax = 9999
+    local ammocap = (GetConVar("wblmoney_noammocaponbuy"):GetBool() and GetConVar("wblmoney_noammocaprestriction"):GetBool()) and bypassammomax or ammo.maxquantity
+
+    local currentammo = ply:GetAmmoCount(ammo.class)
+    if currentammo < ammocap then
+        local ammodiff = ammocap - currentammo
+        local buymult = math.ceil(ammodiff / ammo.quantity)
+        local wblmoney = ply:GetPData("wblmoney", -1)
+        if tonumber(wblmoney) >= ammo.price then
+            for i = 1, buymult do
+                local wblmoney = ply:GetPData("wblmoney", -1)
+                ammodiff = ammocap - currentammo
+                if tonumber(wblmoney) >= ammo.price then
+                    if Moneydeduct(ply, ammo.price, true) then
+                        local plyammo = ply:GetAmmoCount(ammo.class)
+                        if ammodiff >= ammo.quantity then
+                            AddReserveAmmo(ply, ammo.class, ammo.quantity)
+                        else
+                            SetReserveAmmo(ply, ammo.class, ammocap)
+                        end
+                        if remammo1 ~= ply:GetAmmoCount(ammo.class) then
+                            net.Start("wblplyboughtpasound")
+                            net.Send(ply)
+                            remammo1 = ply:GetAmmoCount(ammo.class)
+                            remweapon = ply:GetActiveWeapon()
+                        elseif (remammo1 == plyammo) and (remweapon == ply:GetActiveWeapon()) then
+                            net.Start("wblplyhasmaxprimeammo")
+                            net.Send(ply)
+                            Moneyadd(ply, ammo.price, true)
+                            wblDebug("Weapon has its own reserve ammo set, it is overriding my settings!, will follow SWEPs rule!")
+                            break
+                        end
+                    end
+                else
+                    break
+                end
+            end
+        else
+            net.Start("wblplynomoney")
+            net.Send(ply)
+            net.Start("plyMonzupdateToCLose")
+            net.WriteInt(wblmoney, 32)
+            net.Send(ply)
+        end
+    else
+        net.Start("wblplyhasmaxprimeammo")
+        net.Send(ply)
+    end
 end)
 
---for Buying 1 Secondary Ammo
 net.Receive("wblplybought1secammo", function(len, ply)
-	local price = net.ReadInt(32)
-	local weapon = ply:GetActiveWeapon()
-	if not (IsValid(weapon) and weapon:GetClass() ~= "none") then 
-    	net.Start("wblNoWeaponsound")
-	    net.Send(ply)
-     	return 
- 	end
-	local weaponclass = weapon:GetClass()
-	local foundWeapon = FindWeaponByClass(weaponclass)
-	if foundWeapon == nil then
-		net.Start("wblplydontknowweaponsound")
-		net.Send(ply)
-		return
+    local price = net.ReadInt(32)
+    local weapon = ply:GetActiveWeapon()
+    if not (IsValid(weapon) and weapon:GetClass() ~= "none") then 
+        net.Start("wblNoWeaponsound")
+        net.Send(ply)
+        return 
+    end
+
+    local weaponclass = weapon:GetClass()
+    local foundWeapon = FindWeaponByClass(weaponclass)
+    if foundWeapon == nil then
+        net.Start("wblplydontknowweaponsound")
+        net.Send(ply)
+        return
     elseif foundWeapon.Arsenaltype == "C" then
         net.Start("wblplynoammotypesoundC")
         net.WriteInt(2,16)
         net.Send(ply)
         return
-	elseif foundWeapon.ammo2 == "N.A." then
-		net.Start("wblplynoammotypesound")
-		net.WriteInt(2,16)
-		net.Send(ply)
-		return
-	end
+    elseif foundWeapon.ammo2 == "N.A." then
+        net.Start("wblplynoammotypesound")
+        net.WriteInt(2,16)
+        net.Send(ply)
+        return
+    end
 
-	local ammo = FindAmmoByName(foundWeapon.ammo2)
+    local ammo = FindAmmoByName(foundWeapon.ammo2)
     if ammo == nil then
         net.Start("wblbutton1soundother")
         net.WriteInt(1,16)
         net.Send(ply)
         return
     end
-	local currentammo = ply:GetAmmoCount(ammo.class)
-	if currentammo < ammo.maxquantity then
-		local ammodiff = ammo.maxquantity - currentammo
-		if Moneydeduct(ply, ammo.price, true) then
-			local plyammo = ply:GetAmmoCount(ammo.class)
-			if ammodiff >= ammo.quantity then
-				AddReserveAmmo(ply, ammo.class, ammo.quantity)
-			else
-				SetReserveAmmo(ply, ammo.class, ammo.maxquantity)
-			end
-			if remammo2 ~= ply:GetAmmoCount(ammo.class) then
-				net.Start("wblplyboughtpasound")
-				net.Send(ply)
-				remammo2 = ply:GetAmmoCount(ammo.class)
-				remweapon = ply:GetActiveWeapon()
-			elseif (remammo2 == plyammo) and (remweapon == ply:GetActiveWeapon()) then
-				net.Start("wblplyhasmaxsecammo")
-				net.Send(ply)
-				Moneyadd(ply, ammo.price, true)
-				wblDebug("Weapon has its own reserve ammo set, it is overriding my settings!, will follow SWEPs rule!")
-			end
-		end
-	else
-		net.Start("wblplyhasmaxsecammo")
-		net.Send(ply)
-	end
+
+    -- Bypass max if convar is set
+    local bypassammomax = 9999
+    local ammocap = (GetConVar("wblmoney_noammocaponbuy"):GetBool() and GetConVar("wblmoney_noammocaprestriction"):GetBool()) and bypassammomax or ammo.maxquantity
+
+    local currentammo = ply:GetAmmoCount(ammo.class)
+    if currentammo < ammocap then
+        local ammodiff = ammocap - currentammo
+        if Moneydeduct(ply, ammo.price, true) then
+            local plyammo = ply:GetAmmoCount(ammo.class)
+            if ammodiff >= ammo.quantity then
+                AddReserveAmmo(ply, ammo.class, ammo.quantity)
+            else
+                SetReserveAmmo(ply, ammo.class, ammocap)
+            end
+            if remammo2 ~= ply:GetAmmoCount(ammo.class) then
+                net.Start("wblplyboughtpasound")
+                net.Send(ply)
+                remammo2 = ply:GetAmmoCount(ammo.class)
+                remweapon = ply:GetActiveWeapon()
+            elseif (remammo2 == plyammo) and (remweapon == ply:GetActiveWeapon()) then
+                net.Start("wblplyhasmaxsecammo")
+                net.Send(ply)
+                Moneyadd(ply, ammo.price, true)
+                wblDebug("Weapon has its own reserve ammo set, it is overriding my settings!, will follow SWEPs rule!")
+            end
+        end
+    else
+        net.Start("wblplyhasmaxsecammo")
+        net.Send(ply)
+    end
 end)
 
 
 
 --for Buying All Secondary Ammo
 net.Receive("wblplyboughtfullsecammo", function(len, ply)
-	local price = net.ReadInt(32)
-	local weapon = ply:GetActiveWeapon()
-	if not (IsValid(weapon) and weapon:GetClass() ~= "none") then 
-    	net.Start("wblNoWeaponsound")
-	    net.Send(ply)
-     	return 
- 	end
-	local weaponclass = weapon:GetClass()
-	local foundWeapon = FindWeaponByClass(weaponclass)
-	if foundWeapon == nil then
-		net.Start("wblplydontknowweaponsound")
-		net.Send(ply)
-		return
+    local price = net.ReadInt(32)
+    local weapon = ply:GetActiveWeapon()
+    if not (IsValid(weapon) and weapon:GetClass() ~= "none") then 
+        net.Start("wblNoWeaponsound")
+        net.Send(ply)
+        return 
+    end
+
+    local weaponclass = weapon:GetClass()
+    local foundWeapon = FindWeaponByClass(weaponclass)
+    if foundWeapon == nil then
+        net.Start("wblplydontknowweaponsound")
+        net.Send(ply)
+        return
     elseif foundWeapon.Arsenaltype == "C" then
         net.Start("wblplynoammotypesoundC")
         net.WriteInt(2,16)
         net.Send(ply)
         return
-	elseif foundWeapon.ammo2 == "N.A." then
-		net.Start("wblplynoammotypesound")
-		net.WriteInt(2,16)
-		net.Send(ply)
-		return
-	end
-	local ammo = FindAmmoByName(foundWeapon.ammo2)
+    elseif foundWeapon.ammo2 == "N.A." then
+        net.Start("wblplynoammotypesound")
+        net.WriteInt(2,16)
+        net.Send(ply)
+        return
+    end
+
+    local ammo = FindAmmoByName(foundWeapon.ammo2)
     if ammo == nil then
         net.Start("wblbutton1soundother")
         net.WriteInt(1,16)
         net.Send(ply)
         return
     end
-	local currentammo = ply:GetAmmoCount(ammo.class)
-	if currentammo < ammo.maxquantity then
-		local ammodiff = ammo.maxquantity - currentammo
-		local buymult = math.ceil(ammodiff/ammo.quantity)
-		local wblmoney = ply:GetPData("wblmoney",-1)
-		if tonumber(wblmoney) >= ammo.price then
-			for i = 1, buymult do
-				local wblmoney = ply:GetPData("wblmoney",-1)
-				ammodiff = ammo.maxquantity - currentammo
-				if tonumber(wblmoney) >= ammo.price then
-						if Moneydeduct(ply, ammo.price, true) then
-							local plyammo = ply:GetAmmoCount(ammo.class)
-							if ammodiff >= ammo.quantity then
-								AddReserveAmmo(ply, ammo.class, ammo.quantity)
-							else
-								SetReserveAmmo(ply, ammo.class, ammo.maxquantity)
-							end
-							if remammo2 ~= ply:GetAmmoCount(ammo.class) then
-								net.Start("wblplyboughtpasound")
-								net.Send(ply)
-								remammo2 = ply:GetAmmoCount(ammo.class)
-								remweapon = ply:GetActiveWeapon()
-							elseif (remammo2 == plyammo) and (remweapon == ply:GetActiveWeapon()) then
-								net.Start("wblplyhasmaxsecammo")
-								net.Send(ply)
-								Moneyadd(ply, ammo.price, true)
-								wblDebug("Weapon has its own reserve ammo set, it is overriding my settings!, will follow SWEPs rule!")
-								break
-							end
-						end
-				else
-	
-					break
-				end
-			end
-		else
-			net.Start("wblplynomoney")
-			net.Send(ply)
-			net.Start("plyMonzupdateToCLose")
-			net.WriteInt(wblmoney, 32)
-			net.Send(ply)
-		end
-	else
-		net.Start("wblplyhasmaxsecammo")
-		net.Send(ply)
-	end
+
+    -- Bypass ammo max if convar is enabled
+    local bypassammomax = 9999
+    local ammocap = (GetConVar("wblmoney_noammocaponbuy"):GetBool() and GetConVar("wblmoney_noammocaprestriction"):GetBool()) and bypassammomax or ammo.maxquantity
+
+    local currentammo = ply:GetAmmoCount(ammo.class)
+    if currentammo < ammocap then
+        local ammodiff = ammocap - currentammo
+        local buymult = math.ceil(ammodiff / ammo.quantity)
+        local wblmoney = ply:GetPData("wblmoney", -1)
+
+        if tonumber(wblmoney) >= ammo.price then
+            for i = 1, buymult do
+                local wblmoney = ply:GetPData("wblmoney", -1)
+                ammodiff = ammocap - currentammo
+
+                if tonumber(wblmoney) >= ammo.price then
+                    if Moneydeduct(ply, ammo.price, true) then
+                        local plyammo = ply:GetAmmoCount(ammo.class)
+                        if ammodiff >= ammo.quantity then
+                            AddReserveAmmo(ply, ammo.class, ammo.quantity)
+                        else
+                            SetReserveAmmo(ply, ammo.class, ammocap)
+                        end
+                        if remammo2 ~= ply:GetAmmoCount(ammo.class) then
+                            net.Start("wblplyboughtpasound")
+                            net.Send(ply)
+                            remammo2 = ply:GetAmmoCount(ammo.class)
+                            remweapon = ply:GetActiveWeapon()
+                        elseif (remammo2 == plyammo) and (remweapon == ply:GetActiveWeapon()) then
+                            net.Start("wblplyhasmaxsecammo")
+                            net.Send(ply)
+                            Moneyadd(ply, ammo.price, true)
+                            wblDebug("Weapon has its own reserve ammo set, it is overriding my settings!, will follow SWEPs rule!")
+                            break
+                        end
+                    end
+                else
+                    break
+                end
+            end
+        else
+            net.Start("wblplynomoney")
+            net.Send(ply)
+            net.Start("plyMonzupdateToCLose")
+            net.WriteInt(wblmoney, 32)
+            net.Send(ply)
+        end
+    else
+        net.Start("wblplyhasmaxsecammo")
+        net.Send(ply)
+    end
 end)
 
 --placeholder price
@@ -2912,4 +3025,14 @@ hook.Add("Initialize", "LoadWeaponAndAmmoLists", function()
     wblammolist = {}
     wblweaponlist = LoadTableFromFile("RememberWeaponlist", "wblweaponlist") or {}
     wblammolist = LoadTableFromFile("RememberAmmolist", "wblammolist") or {}
+end)
+
+
+hook.Add("OnRepairedObject", "WBL_RepairPoints", function(ply, ent, health)
+    if not IsValid(ply) or not ply:IsPlayer() then return end
+
+    local add = health / 2
+    local seen = true
+
+    Moneyadd(ply, add, seen)
 end)

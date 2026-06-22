@@ -247,8 +247,8 @@ wblmonplyvalue = CreateConVar( "wblmoney_money_plyvalue", 300, FCVAR_NONE, "300"
 wblmonentvalue = CreateConVar( "wblmoney_money_entvalue", 50, FCVAR_NONE, "50", 0, math.huge )
 
 
-
-
+CreateConVar("wblmoney_noammocaprestriction", "1", {FCVAR_ARCHIVE, FCVAR_REPLICATED}, "Will disable Ammo cap restriction")
+CreateConVar("wblmoney_noammocaponbuy", "0", {FCVAR_ARCHIVE, FCVAR_REPLICATED}, "Will disable Ammo cap when buying ammo")
 
 --Disable money gain on NPC who likes player
 wblmonhallmon = CreateConVar( "wblmoney_Nomoneyonally", 0, FCVAR_NONE, "0", 0, 1 )
@@ -679,7 +679,9 @@ local defaultConVars = {
     ["wblmoney_money_coop"] = "0",
     ["wblmoney_money_plyvalue"] = "300",
     ["wblmoney_money_entvalue"] = "50",
-    ["wblmoney_Nomoneyonally"] = "0"
+    ["wblmoney_Nomoneyonally"] = "0",
+    ["wblmoney_noammocaprestriction"] = "1",
+    ["wblmoney_noammocaponbuy"] = "1",
 }
 
 --Save Convar Values in a file
@@ -706,7 +708,9 @@ local convarList = {
     "wblmoney_money_coop",             -- Enables money division among players.
     "wblmoney_money_plyvalue",         -- Money value of a player.
     "wblmoney_money_entvalue",         -- Money value of a money entity.
-    "wblmoney_Nomoneyonally"           -- Disables money gain for friendly NPCs (who like the player).
+    "wblmoney_Nomoneyonally",           -- Disables money gain for friendly NPCs (who like the player).
+    "wblmoney_noammocaprestriction",
+    "wblmoney_noammocaponbuy",
 }
 
 
@@ -1148,7 +1152,7 @@ function wblfnlmoney(addvalue,npcc)
 		if not npcc:IsValid() then return 0 end
         local npcclass = tostring(npcc:GetClass())
 		wblDebug("NPC Class from server: "..npcclass)
-        if npcclass == "npc_bullseye" then return 50 end
+        if npcclass == "npc_bullseye" then return 0 end
 		local npcmodel = tostring(npcc:GetModel())
 		wblDebug("NPC Model from server: "..npcmodel)
 		local npcmaterial = tostring(npcc:GetMaterial())
@@ -1622,7 +1626,9 @@ local restrictedItemsSB = {
 
 hook.Add("PlayerSwitchWeapon", "RestrictPlayerAmmoOnSwitch", function(ply, oldWeapon, newWeapon)
     wblDebug("Player Switched weapon")
-    RestrictPlayerAmmoToMax(ply, wblammolist)
+    if not GetConVar("wblmoney_noammocaprestriction"):GetBool() then
+        RestrictPlayerAmmoToMax(ply, wblammolist)
+    end
 end)
 
 -- Function to prevent pickup of restricted items
@@ -2742,6 +2748,6 @@ end)
 end -- Its the "end" of IF SERVER
 
 
-
-
-
+    ------------------------------------------------------------------------
+    -------------------- Tools for Testing ---------------------------------
+    ------------------------------------------------------------------------
