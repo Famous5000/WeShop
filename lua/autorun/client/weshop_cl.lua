@@ -5,6 +5,10 @@ wblfontoffset = 40
 Adjw = (ScrW()/1920)
 Adjh = (ScrH()/1080)
 
+-- Client display preference (issue #24): sort the shop weapon list alphabetically
+-- within each category. Off by default (preserves the admin-defined order).
+CreateClientConVar("weshop_sort_alpha", "0", true, false, "Sort the WeShop weapon list alphabetically within each category")
+
 
 surface.CreateFont( "pont_1", {
 	font = "Arial", 

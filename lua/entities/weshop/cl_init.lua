@@ -366,8 +366,19 @@ local remnumbut = #wblweaponlist
 			end
 
 		
-		    -- Add buttons to the scroll panel
-		    for k, v in ipairs(wblweaponlistaftcat.weapons) do
+		    -- Add buttons to the scroll panel. Optional alphabetical sort (issue #24):
+		    -- when the client convar weshop_sort_alpha is on, display a name-sorted COPY
+		    -- of this category's weapons -- never mutating the server-side order. The
+		    -- `or {}` also defends the client render against a nil weapons list.
+		    local weaponsToShow = wblweaponlistaftcat.weapons or {}
+		    local sortCvar = GetConVar("weshop_sort_alpha")
+		    if sortCvar and sortCvar:GetBool() then
+		        weaponsToShow = table.Copy(weaponsToShow)
+		        table.sort(weaponsToShow, function(a, b)
+		            return tostring(a.name):lower() < tostring(b.name):lower()
+		        end)
+		    end
+		    for k, v in ipairs(weaponsToShow) do
 			        local button = scrollPanel:Add("DButton")
 			        button:SetText("")
 			        button:SetSize(400*Adjw, 40*Adjh)
