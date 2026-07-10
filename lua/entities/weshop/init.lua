@@ -902,6 +902,133 @@ local function SpawnWeapononme(ply, weaponClass)
     end
 end
 
+-- Spawn a bought "ENT" catalogue item where the buyer is aiming. Handles two cases:
+--   * Scripted entities / props -> ents.Create on the class (old path, SpawnWeapononme).
+--   * Spawn-menu NPCs -> the shop "class" is really an NPC-list KEY (e.g.
+--     "npc_rollermine_hacked") that maps to a real base class ("npc_rollermine")
+--     PLUS spawnflags/keyvalues. ents.Create on the key alone returns NULL -- that's
+--     the "Attempted to create unknown entity type" bug (issue #26).
+-- This is a faithful port of sandbox's InternalSpawnNPC, MINUS the AdminOnly gate
+-- (an admin who lists an NPC in the shop meant it to be purchasable). Ownership
+-- matches the existing entity buy: ownerless (no creator / undo / cleanup).
+local function SpawnBoughtEntity(ply, class)
+    if not IsValid(ply) or not ply:IsPlayer() then return end
+
+    local NPCData = list.GetEntry and list.GetEntry("NPC", class) or list.Get("NPC")[class]
+    if not NPCData or not NPCData.Class then
+        -- Not an NPC-list entry -> scripted entity / prop (unchanged behavior).
+        return SpawnWeapononme(ply, class)
+    end
+
+    -- Aim trace from the buyer's eyes, same as sandbox GetSpawnTrace.
+    local vStart = ply:GetShootPos()
+    local tr = util.TraceLine({
+        start  = vStart,
+        endpos = vStart + ply:EyeAngles():Forward() * 2048,
+        filter = { ply, ply:GetVehicle() }
+    })
+    local Position, Normal = tr.HitPos, tr.HitNormal
+
+    -- Ceiling/floor gating (barnacles / turrets must land on the right surface).
+    local bDropToFloor, wasSpawnedOnCeiling, wasSpawnedOnFloor = false, false, false
+    if NPCData.OnCeiling or NPCData.OnFloor then
+        local isOnCeiling = Vector(0, 0, -1):Dot(Normal) >= 0.95
+        local isOnFloor   = Vector(0, 0,  1):Dot(Normal) >= 0.95
+        if not isOnCeiling and not NPCData.OnFloor then return end
+        if not isOnFloor and not NPCData.OnCeiling then return end
+        if not isOnFloor and not isOnCeiling then return end
+        wasSpawnedOnCeiling, wasSpawnedOnFloor = isOnCeiling, isOnFloor
+    else
+        bDropToFloor = true
+    end
+    if NPCData.NoDrop then bDropToFloor = false end
+
+    local NPC = ents.Create(NPCData.Class)
+    if not IsValid(NPC) then
+        wblDebug("Failed to create NPC entity: " .. tostring(NPCData.Class))
+        return
+    end
+
+    -- Position + facing (face the buyer).
+    NPC:SetPos(Position + Normal * (NPCData.Offset or 32))
+    local Angles = ply:GetAngles()
+    Angles.pitch, Angles.roll = 0, 0
+    Angles.yaw = Angles.yaw + 180
+    if NPCData.Rotate then Angles = Angles + NPCData.Rotate end
+    NPC:SetAngles(Angles)
+    if NPCData.SnapToNormal then NPC:SetAngles(Normal:Angle()) end
+
+    -- Model / material.
+    local NPCModel = NPCData.Model
+    if istable(NPCModel) then NPCModel = NPCModel[math.random(#NPCModel)] end
+    if NPCModel then NPC:SetModel(NPCModel) end
+    if NPCData.Material then NPC:SetMaterial(NPCData.Material) end
+
+    -- Spawn flags (this is what turns npc_rollermine into the *hacked* variant, etc.).
+    local SpawnFlags = bit.bor(SF_NPC_FADE_CORPSE, SF_NPC_ALWAYSTHINK)
+    if NPCData.SpawnFlags then SpawnFlags = bit.bor(SpawnFlags, NPCData.SpawnFlags) end
+    if NPCData.TotalSpawnFlags then SpawnFlags = NPCData.TotalSpawnFlags end
+    NPC:SetKeyValue("spawnflags", SpawnFlags)
+    NPC.SpawnFlags = SpawnFlags
+
+    -- Key values (+ squad-overflow guard, mirroring sandbox).
+    local squadName = nil
+    if NPCData.KeyValues then
+        for k, v in pairs(NPCData.KeyValues) do
+            NPC:SetKeyValue(k, v)
+            if string.lower(k) == "squadname" then squadName = v end
+        end
+    end
+    if squadName and ai.GetSquadMemberCount(squadName) >= 16 then
+        local sqNum = 0
+        while ai.GetSquadMemberCount(squadName .. sqNum) >= 16 do sqNum = sqNum + 1 end
+        NPC:SetKeyValue("SquadName", squadName .. sqNum)
+    end
+
+    if NPCData.Skin then NPC:SetSkin(NPCData.Skin) end
+
+    -- Give the NPC its default listed weapon so combat NPCs actually fight.
+    if istable(NPCData.Weapons) then
+        for _, wep in ipairs(NPCData.Weapons) do
+            if wep and wep ~= "" then
+                NPC:SetKeyValue("additionalequipment", wep)
+                NPC.Equipment = wep
+                break
+            end
+        end
+    end
+
+    -- Surface-specific setup callbacks (function form of OnFloor/OnCeiling).
+    if wasSpawnedOnCeiling and isfunction(NPCData.OnCeiling) then
+        NPCData.OnCeiling(NPC)
+    elseif wasSpawnedOnFloor and isfunction(NPCData.OnFloor) then
+        NPCData.OnFloor(NPC)
+    end
+
+    NPC:Spawn()
+    NPC:Activate()
+
+    NPC.NPCName = class
+    NPC._wasSpawnedOnCeiling = wasSpawnedOnCeiling
+
+    -- Some NPCs reset their model/skin inside Spawn(); re-apply.
+    if NPCModel and NPC:GetModel():lower() ~= NPCModel:lower() then NPC:SetModel(NPCModel) end
+    if NPCData.Skin then NPC:SetSkin(NPCData.Skin) end
+
+    if bDropToFloor then NPC:DropToFloor() end
+
+    if NPCData.Health then
+        NPC:SetHealth(NPCData.Health)
+        NPC:SetMaxHealth(NPCData.Health)
+    end
+    if NPCData.BodyGroups then
+        for k, v in pairs(NPCData.BodyGroups) do NPC:SetBodygroup(k, v) end
+    end
+
+    wblDebug("Spawned NPC '" .. class .. "' (base class " .. NPCData.Class .. ") for " .. ply:Nick())
+    return NPC
+end
+
 local function GiveWeaponToPlayer(ply, weaponClass)
     -- Attempt to give the weapon using the VJ base method
     if ply:Give(weaponClass) then
@@ -1706,7 +1833,7 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
                         GiveWeaponToPlayer(ply, weaponClass)
 		    			--ply:Give(weaponClass)
                     elseif arsenal == "ENT" then
-                        SpawnWeapononme(ply, weaponClass)
+                        SpawnBoughtEntity(ply, weaponClass)
                         net.Start("wblplyboughtweapon")
                         net.WriteUInt(2,8)
                         net.Send(ply)
@@ -1768,7 +1895,7 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
                 GiveWeaponToPlayer(ply, weaponClass)
                 --ply:Give(weaponClass)
             elseif arsenal == "ENT" then
-                SpawnWeapononme(ply, weaponClass)
+                SpawnBoughtEntity(ply, weaponClass)
                 net.Start("wblplyboughtweapon")
                 net.WriteUInt(2,8)
                 net.Send(ply)
