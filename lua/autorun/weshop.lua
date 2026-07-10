@@ -21,8 +21,89 @@ function wblDebug(a)
 end
 -- for Debugging (END) --
 
+-- Co-op shared money pool (issue #22): is the pooled mode on?
+function WblMoneyPool()
+	local c = GetConVar("weshop_money_pool")
+	return c and c:GetBool()
+end
+
+-- Apply a money delta to the shared pool and mirror it onto EVERY player, so all
+-- players read / spend / lose from one balance. The current pool is read from any
+-- player (they are kept in lockstep). Used by changeMoney when the pool convar is on.
+function WblChangePool(amount)
+	local players = player.GetHumans()
+	if #players == 0 then return end
+	local cur = tonumber(players[1]:GetPData("wblmoney", -1)) or 0
+	if cur < 0 then cur = 0 end
+	local maxmonz = tonumber(wblmonmax:GetInt())
+	local newval = math.Clamp(math.ceil(cur + amount), 0, maxmonz)
+	local diff = newval - cur
+	for _, ply in ipairs(players) do
+		ply:SetPData("wblmoney", newval)
+		ply:SetPData("wblmoneyOld", newval)
+		if diff > 0 then
+			net.Start("plyMonzupdateToC")
+			net.WriteInt(newval, 32)
+			net.WriteInt(diff, 32)
+			net.Send(ply)
+		elseif diff < 0 then
+			net.Start("plyMonzupdateToCLose")
+			net.WriteInt(newval, 32)
+			net.WriteInt(-diff, 32)
+			net.Send(ply)
+		end
+	end
+end
+
+-- On enable, pool everyone's current balances into the shared pot (sum, clamped to
+-- max). Design default (issue #22) -- change if you'd rather it reset or take the max.
+cvars.AddChangeCallback("weshop_money_pool", function(convar, oldv, newv)
+	if tonumber(newv) ~= 1 then return end
+	local players = player.GetHumans()
+	if #players == 0 then return end
+	local total = 0
+	for _, ply in ipairs(players) do total = total + (tonumber(ply:GetPData("wblmoney", 0)) or 0) end
+	total = math.Clamp(total, 0, tonumber(wblmonmax:GetInt()))
+	for _, ply in ipairs(players) do
+		ply:SetPData("wblmoney", total)
+		ply:SetPData("wblmoneyOld", total)
+		net.Start("plyMonzupdateToC")
+		net.WriteInt(total, 32)
+		net.WriteInt(0, 32)
+		net.Send(ply)
+	end
+end, "weshop_pool_enable")
+
+-- A player joining while the pool is on ADOPTS the shared balance (they don't add
+-- their own money to it). Delayed so it lands after WeShop's own money-load on spawn.
+hook.Add("PlayerInitialSpawn", "wblmoney_pool_join", function(joiner)
+	timer.Simple(2, function()
+		if not (IsValid(joiner) and WblMoneyPool()) then return end
+		local ref
+		for _, ply in ipairs(player.GetHumans()) do
+			if ply ~= joiner then ref = ply break end
+		end
+		if not IsValid(ref) then return end
+		local pool = tonumber(ref:GetPData("wblmoney", -1)) or 0
+		if pool < 0 then return end
+		joiner:SetPData("wblmoney", pool)
+		joiner:SetPData("wblmoneyOld", pool)
+		net.Start("plyMonzupdateToC")
+		net.WriteInt(pool, 32)
+		net.WriteInt(0, 32)
+		net.Send(joiner)
+	end)
+end)
+
 -- universal money modification function (handles positive and negative)
 function changeMoney(player,amount)
+	-- Co-op shared pool: a real change goes to the shared pot for everyone. Death loss
+	-- and kill / NPC rewards all route through here, so "one death drains everyone" is
+	-- automatic. amount==0 (sync_user) keeps the per-player path below.
+	if amount ~= 0 and WblMoneyPool() then
+		WblChangePool(amount)
+		return
+	end
 	if amount == 0 then -- called via sync_user
 		local old = player:GetPData("wblmoneyOld",player:GetPData("wblmoney",-1))
 		local cur = player:GetPData("wblmoney",-1)
@@ -250,6 +331,9 @@ wblmonplycoop = CreateConVar( "wblmoney_money_coop", 0, FCVAR_NONE, "0", 0, 1 )
 
 --Currency symbol shown in the shop (issue #23). Replicated so clients read it.
 CreateConVar( "weshop_currency", "ω", bit.bor( FCVAR_REPLICATED, FCVAR_ARCHIVE, FCVAR_NOTIFY ), "Currency symbol/label displayed in the weapon shop (e.g. $ or credits)" )
+
+--Co-op shared money pool (issue #22). When on, all players share ONE balance.
+wblmonpool = CreateConVar( "weshop_money_pool", 0, bit.bor( FCVAR_ARCHIVE, FCVAR_NOTIFY ), "Co-op: all players share one money pot -- buys, kill/NPC rewards, and death loss all hit the shared balance", 0, 1 )
 
 --Money Value of player
 wblmonplyvalue = CreateConVar( "wblmoney_money_plyvalue", 300, FCVAR_NONE, "300", 0, math.huge )
