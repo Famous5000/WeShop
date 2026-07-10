@@ -206,7 +206,7 @@ net.Receive("wblupdatepricetoClient",function()
 		ammo1price = "( N.A.)"
 		ammo1pricefull = "( N.A.)"
 	else
-		ammo1price = "( ω"..ammo1.." )"
+		ammo1price = "( "..WblCurrency()..""..ammo1.." )"
 		ammo1pricefull = "( varies )"
 	end
 
@@ -214,7 +214,7 @@ net.Receive("wblupdatepricetoClient",function()
 		ammo2price = "( N.A.)"
 		ammo2pricefull = "( N.A.)"
 	else
-		ammo2price = "( ω"..ammo2.." )"
+		ammo2price = "( "..WblCurrency()..""..ammo2.." )"
 		ammo2pricefull = "( varies )"
 	end
 
@@ -379,7 +379,7 @@ local remnumbut = #wblweaponlist
 					local BackModelPanel, BackTitlePanel, BackDescPanel
 					local ModelPanel, TitlePanel, DescPanel
 					local finalname = "("..k..") "..v.name -- change to truncate the dot dot
-					local finalcost = "ω"..v.cost
+					local finalcost = ""..WblCurrency()..""..v.cost
 
 
 
@@ -989,25 +989,25 @@ local remnumbut = #wblweaponlist
 		CreateBuyButton(WeshopMedkitBuy1button, wblBuyMenu, "Buybutton", "ClickedBuybutton", 1000, 165, "Buy 10 Health", "wblplybought10hp")
 
 		--Price Label for 10HP button
-		CreatePriceDlabel(WeshopMedkitLabel1, wblBuyMenu, 1170, 165, "( ω"..HP10price.." )")
+		CreatePriceDlabel(WeshopMedkitLabel1, wblBuyMenu, 1170, 165, "( "..WblCurrency()..""..HP10price.." )")
 		
 		--Buy 25HP button
 		CreateBuyButton(WeshopMedkitBuy2button, wblBuyMenu, "Buybutton", "ClickedBuybutton", 1000, 220, "Buy 25 Health", "wblplybought25hp")
 
 		--Price Label for 25HP button
-		CreatePriceDlabel(WeshopMedkitLabel2, wblBuyMenu, 1170, 220, "( ω"..HP25price.." )")
+		CreatePriceDlabel(WeshopMedkitLabel2, wblBuyMenu, 1170, 220, "( "..WblCurrency()..""..HP25price.." )")
 		    
 		--Buy 10AP button
 		CreateBuyButton(WeshopBattery1button, wblBuyMenu, "Buybutton", "ClickedBuybutton", 1000, 302.5, "Buy 10 Armor", "wblplybought10ap")
 		
 		--Price Label for 10AP button
-		CreatePriceDlabel(WeshopBattery1Label, wblBuyMenu, 1170, 302.5, "( ω"..AP10price.." )")
+		CreatePriceDlabel(WeshopBattery1Label, wblBuyMenu, 1170, 302.5, "( "..WblCurrency()..""..AP10price.." )")
 
 		--Buy 25AP button
 		CreateBuyButton(WeshopBattery2button, wblBuyMenu, "Buybutton", "ClickedBuybutton", 1000, 357.5, "Buy 25 Armor", "wblplybought25ap")
 		
 		--Price Label for 25AP button
-		CreatePriceDlabel(WeshopBattery2Label, wblBuyMenu, 1170, 357.5, "( ω"..AP25price.." )")
+		CreatePriceDlabel(WeshopBattery2Label, wblBuyMenu, 1170, 357.5, "( "..WblCurrency()..""..AP25price.." )")
 
 		--Buy 1 Primary ammo button
 		CreateBuyButtonPrimaryAmmoKEY(WeshopPrimammo1button, wblBuyMenu, "Buybuttonammo", "ClickedBuybuttonammo", 1000, 440, "Buy Ammo", "wblplybought1primeammo")
@@ -1054,7 +1054,7 @@ local remnumbut = #wblweaponlist
 			name.isHovered = false -- New variable to track hover state
 			local finalsellvalue
 			if weapsellvalue ~= "N.A." then
-				finalsellvalue = "( ω"..weapsellvalue.." )"
+				finalsellvalue = "( "..WblCurrency()..""..weapsellvalue.." )"
 			else
 				finalsellvalue = "( "..weapsellvalue.." )"
 			end

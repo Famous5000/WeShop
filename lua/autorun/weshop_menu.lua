@@ -2158,7 +2158,7 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
     						AmmoList:Clear()
     						--PrintTable(wblammolist)
     						for k, v in ipairs(wblammolist) do
-    						    AmmoList:AddLine(v.name, v.class, "ω"..v.price, v.quantity, v.maxquantity)
+    						    AmmoList:AddLine(v.name, v.class, ""..WblCurrency()..""..v.price, v.quantity, v.maxquantity)
     						end
                         end
 					end
@@ -2174,7 +2174,7 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
     						        WepList:AddLine(
     						            weapon.name,               
     						            weapon.class,              
-    						            "ω"..weapon.cost,
+    						            ""..WblCurrency()..""..weapon.cost,
                                         weapon.slotid,               
     						            weapon.Arsenaltype,            
     						            tier.name                  
@@ -2330,7 +2330,7 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
 
                             local EditLabelold = vgui.Create("DLabel", Editframe)        
                             EditLabelold:Dock(TOP)
-                            EditLabelold:SetText("Old cost: ω"..foundweapon.cost)             
+                            EditLabelold:SetText("Old cost: "..WblCurrency()..""..foundweapon.cost)             
 
                             local EditLabel = vgui.Create("DLabel", Editframe)        
                             EditLabel:Dock(TOP)
@@ -2452,7 +2452,7 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
 
                                 local EditLabelold = vgui.Create("DLabel", Editframe)        
                                 EditLabelold:Dock(TOP)
-                                EditLabelold:SetText("Old Sell Value: ω"..foundweapon.sellvalue)             
+                                EditLabelold:SetText("Old Sell Value: "..WblCurrency()..""..foundweapon.sellvalue)             
 
                                 local EditLabel = vgui.Create("DLabel", Editframe)        
                                 EditLabel:Dock(TOP)
@@ -2692,7 +2692,7 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
 
                             local EditLabelold = vgui.Create("DLabel", Editframe)        
                             EditLabelold:Dock(TOP)
-                            EditLabelold:SetText("Old price: ω"..foundAmmo.price)             
+                            EditLabelold:SetText("Old price: "..WblCurrency()..""..foundAmmo.price)             
 
                             local EditLabel = vgui.Create("DLabel", Editframe)        
                             EditLabel:Dock(TOP)
@@ -3079,7 +3079,7 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
 				Forrm1:SetSize(1,100)
 				Forrm1:SetName("Money General Options")
 				Forrm1:CheckBox( "Enable Money System", "wblmoney_enable")
-				Forrm1:ControlHelp("Enable Money system which includes money (ω) gain/loss and money hud. All shops will be free if this is disabled")
+				Forrm1:ControlHelp("Enable Money system which includes money ("..WblCurrency()..") gain/loss and money hud. All shops will be free if this is disabled")
 				Forrm1:ControlHelp("This setting is unaffected by Presets")
 				Forrm1:CheckBox( "Persist Money on Map Change/Restart", "wblmoney_money_persist")
 				Forrm1:ControlHelp("This setting is unaffected by Presets")
@@ -3094,7 +3094,7 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
 				local Dynmoncheckbox = Forrm:CheckBox( "Enable Dynamic Money", "wblmoney_dynamicmoney_enable")
 				
 
-				Forrm:ControlHelp("Dynamic Money gives money (ω) based on the Health Points (HP) of the killed NPC")
+				Forrm:ControlHelp("Dynamic Money gives money ("..WblCurrency()..") based on the Health Points (HP) of the killed NPC")
 				local sliderDMM = Forrm:NumSlider( "Dyn Money Multiplier", "wblmoney_dynamicmoney_multplier", 0, 10 )
 				Forrm:ControlHelp("Multiplies this value to the dynamic money")
 				local sliderDMO = Forrm:NumSlider( "Dyn Money Offset", "wblmoney_dynamicmoney_offset", 0, 5000 )
@@ -3639,7 +3639,7 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
 				Forrm:AddItem(AddNPC)
 				local sliderMGF = Forrm:NumSlider( "Money Gain Fallback", "wblmoney_dynamicmoney_fallback", 0, 10000 )
 					sliderMGF:SetDecimals(0)
-				Forrm:ControlHelp("Money Gain Fallback is the money (ω) gained if the NPC is not on the list above and dynamic money detects unusual health in an npc. This is also the default money value when Dynamic Money is off")
+				Forrm:ControlHelp("Money Gain Fallback is the money ("..WblCurrency()..") gained if the NPC is not on the list above and dynamic money detects unusual health in an npc. This is also the default money value when Dynamic Money is off")
 
 
 				local plycheckbox = Forrm:CheckBox( "Enable Player Co-op", "wblmoney_money_coop")

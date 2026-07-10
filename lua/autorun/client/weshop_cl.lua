@@ -162,11 +162,11 @@ function MoneyGetLabel(a)
     local TxtG = 0
     local b = 0
     if a > 0 then
-    	b = "+ ω" .. tostring(Accumonz)
+    	b = "+ "..WblCurrency().."" .. tostring(Accumonz)
     	TxtG = 255
     	TxtR = 0
 	elseif a < 0 then
-	    b = "- ω" .. tostring((-1)*Accumonz)
+	    b = "- "..WblCurrency().."" .. tostring((-1)*Accumonz)
 	    TxtG = 0
 	    TxtR = 255
 	else
@@ -191,7 +191,7 @@ end
 	--OPTIMIZE IS POSSIBLE
 function updatewblmoney(a) 
 	--if wblhuden == 0 then return end
-	local b = "ω"..tostring(a)
+	local b = ""..WblCurrency()..""..tostring(a)
 	local TTT = 0.02
 
 	timer.Remove("tpont_1")
@@ -268,7 +268,7 @@ end
 
 function updatewblmoneylose(a) 
 	--if wblhuden == 0 then return end
-	local b = "ω"..tostring(a)
+	local b = ""..WblCurrency()..""..tostring(a)
 	local TTT = 0.02
 
 	timer.Remove("tpont_1")

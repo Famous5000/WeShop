@@ -1,5 +1,13 @@
 npcstaticlist = {}
 
+-- Shared helper (issue #23): the shop currency symbol, settable via the
+-- weshop_currency convar. Falls back to the historical omega if unset/empty.
+-- The convar is replicated, so client and server render the same symbol.
+function WblCurrency()
+	local c = GetConVar("weshop_currency")
+	return (c and c:GetString() ~= "" and c:GetString()) or "ω"
+end
+
 if SERVER then
 
 -- CVARS INIT
@@ -239,6 +247,9 @@ wblmonlospercent = CreateConVar( "wblmoney_moneyloss_percent_amount", 10, FCVAR_
 
 --Money Divide among players
 wblmonplycoop = CreateConVar( "wblmoney_money_coop", 0, FCVAR_NONE, "0", 0, 1 )
+
+--Currency symbol shown in the shop (issue #23). Replicated so clients read it.
+CreateConVar( "weshop_currency", "ω", bit.bor( FCVAR_REPLICATED, FCVAR_ARCHIVE, FCVAR_NOTIFY ), "Currency symbol/label displayed in the weapon shop (e.g. $ or credits)" )
 
 --Money Value of player
 wblmonplyvalue = CreateConVar( "wblmoney_money_plyvalue", 300, FCVAR_NONE, "300", 0, math.huge )
@@ -2683,7 +2694,7 @@ concommand.Add("wblmoney_showsuggestedprice", function(ply, cmd, args)
         wblDebug("primaryammo: "..primaryammo)
         wblDebug("secondaryammo: "..secondaryammo)
         wblDebug("**************************************************")
-        ply:ChatPrint("Suggested price of "..weaponClass..": ω"..totalcost)
+        ply:ChatPrint("Suggested price of "..weaponClass..": "..WblCurrency()..""..totalcost)
     else
         wblDebug("You are not holding a valid weapon.")
         ply:ChatPrint("You are not holding a valid weapon.")
