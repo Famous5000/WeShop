@@ -900,6 +900,8 @@ local function SpawnWeapononme(ply, weaponClass)
     else
         wblDebug("Failed to create the weapon entity.")
     end
+    -- Return the entity so callers can detect a failed spawn (invalid on failure).
+    return weapon
 end
 
 -- Spawn a bought "ENT" catalogue item where the buyer is aiming. Handles two cases:
@@ -1331,8 +1333,12 @@ end
 local function RemoveWeaponByClass(weaponClass)
     -- Iterate through the tiers
     for tierIndex, tier in ipairs(wblweaponlist) do
-        -- Iterate through the weapons in each tier
-        for weaponIndex, weapon in ipairs(tier.weapons) do
+        -- Iterate through the weapons in each tier.
+        -- Guard against a nil `weapons` (issue #18): when the list is round-tripped
+        -- through net/preset serialization, a tier whose weapons array was empty can
+        -- come back with weapons == nil, and a bare ipairs(nil) crashes here. The `or {}`
+        -- mirrors line ~2121 which already defends the same loop.
+        for weaponIndex, weapon in ipairs(tier.weapons or {}) do
             if weapon.class == weaponClass then
                 -- Remove the weapon from the tier's weapon list
                 table.remove(tier.weapons, weaponIndex)
@@ -1833,7 +1839,15 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
                         GiveWeaponToPlayer(ply, weaponClass)
 		    			--ply:Give(weaponClass)
                     elseif arsenal == "ENT" then
-                        SpawnBoughtEntity(ply, weaponClass)
+                        local spawnedEnt = SpawnBoughtEntity(ply, weaponClass)
+                        if not IsValid(spawnedEnt) then
+                            -- Spawn failed (bogus class / NULL return) -> refund the money
+                            -- we already deducted above, so a bad entry doesn't eat their cash.
+                            changeMoney(ply, weaponprice)
+                            ply:ChatPrint("[WeShop] That entity failed to spawn - you have been refunded.")
+                            wblBuying = false
+                            return
+                        end
                         net.Start("wblplyboughtweapon")
                         net.WriteUInt(2,8)
                         net.Send(ply)
@@ -1895,7 +1909,14 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
                 GiveWeaponToPlayer(ply, weaponClass)
                 --ply:Give(weaponClass)
             elseif arsenal == "ENT" then
-                SpawnBoughtEntity(ply, weaponClass)
+                local spawnedEnt = SpawnBoughtEntity(ply, weaponClass)
+                if not IsValid(spawnedEnt) then
+                    -- Money system is off here (nothing was charged), so nothing to refund,
+                    -- but still don't tell the player the buy succeeded.
+                    ply:ChatPrint("[WeShop] That entity failed to spawn.")
+                    wblBuying = false
+                    return
+                end
                 net.Start("wblplyboughtweapon")
                 net.WriteUInt(2,8)
                 net.Send(ply)
