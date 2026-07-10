@@ -868,6 +868,36 @@ local remnumbut = #wblweaponlist
 
 		end
 
+		-- issue #19: sell-ammo button. Sells ALL reserve of the held weapon's primary or
+		-- secondary ammo (server decides value/eligibility). secondary=false -> primary.
+		local function CreateSellAmmoButton(xposition, yposition, label, secondary)
+			local name = vgui.Create("DButton", wblBuyMenu)
+			name:SetSize(150*Adjw, 50*Adjh)
+			name:SetText("")
+			name:SetFont("Buybutton")
+			name:SetPos( xposition*Adjw, yposition*Adjh )
+			name.isClicked = false
+			name.isHovered = false
+			function name:Paint(w, h)
+				local col = Color(0, 0, 0, 0)
+				if name.isClicked then col = Color(255, 170, 0, 90)
+				elseif name.isHovered then col = Color(255, 170, 0, 45) end
+				draw.RoundedBox(0, 0, 0, w, h, col)
+				surface.SetDrawColor(255, 170, 0, 150)
+				surface.DrawOutlinedRect(0, 0, w, h, 2)
+				draw.SimpleText(label, "Buybutton", w / 2, h / 2, Color(255, 170, 0, 200), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+			end
+			name.OnCursorEntered = function() name.isHovered = true end
+			name.OnCursorExited = function() name.isHovered = false end
+			name.OnMousePressed = function() name.isClicked = true end
+			name.OnMouseReleased = function()
+				name.isClicked = false
+				net.Start("wblSellAmmo")
+				net.WriteBool(secondary)
+				net.SendToServer()
+			end
+		end
+
 		--MADE NEW ONE FOR KEY PRESS ON PRIMARY AMMO
 		local function CreateBuyButtonPrimaryAmmoKEY(name, frame, fontdefault, fontclick, xposition, yposition, label, netsend)
 			local name = vgui.Create("DButton", wblBuyMenu)
@@ -1043,6 +1073,11 @@ local remnumbut = #wblweaponlist
 		
 		--Price Label for all Primary ammo button
 		CreatePriceDlabel(WeshopSecammo2Label, wblBuyMenu, 1170, 632.5, ammo2pricefull)
+
+		-- issue #19: sell-ammo buttons -- sell ALL reserve of the held weapon's ammo type.
+		-- Positions are a first guess; nudge xposition/yposition to taste.
+		CreateSellAmmoButton(1320, 440, "Sell Ammo", false)
+		CreateSellAmmoButton(1320, 577.5, "Sell Alt Ammo", true)
 
 		wblBuyMenu.OnKeyCodePressed = function(self, keyCode)
 			if keyCode == KEY_E or keyCode == KEY_B then

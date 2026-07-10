@@ -2719,6 +2719,43 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
                             end
                         end)
                         
+                        subMenu:AddOption("Change Sell Value", function()  -- issue #19
+                            local Editframe = vgui.Create("DFrame")
+                            Editframe:SetSize(250, 120)
+                            Editframe:SetTitle("Change Sell Value")
+                            Editframe:Center()
+                            Editframe:MakePopup()
+
+                            local AmmoClass = line:GetColumnText(2)
+                            local foundAmmo = FindAmmoByClass(AmmoClass)
+
+                            local EditLabelold = vgui.Create("DLabel", Editframe)
+                            EditLabelold:Dock(TOP)
+                            EditLabelold:SetText("Old Sell Value: "..WblCurrency()..""..(foundAmmo.sellvalue or 0))
+
+                            local EditLabel = vgui.Create("DLabel", Editframe)
+                            EditLabel:Dock(TOP)
+                            EditLabel:SetText("New Sell Value (0 = unsellable): ")
+
+                            local NewNameTextEntry = vgui.Create("DNumberWang", Editframe)
+                            NewNameTextEntry:Dock( TOP )
+                            NewNameTextEntry:DockMargin( 0, 0, 0, 5 )
+                            NewNameTextEntry:SetMin(0)
+                            NewNameTextEntry:SetMax(math.huge)
+                            NewNameTextEntry:SetValue(foundAmmo.sellvalue or 0)
+                            NewNameTextEntry:SetSize(250, 30)
+                            NewNameTextEntry:RequestFocus()
+                            NewNameTextEntry.OnEnter = function(self)
+                                if NewNameTextEntry:GetValue() ~= "" then
+                                    Editframe:Close()
+                                    net.Start("wblreqChangesellvalammoToS")
+                                    net.WriteString(AmmoClass)
+                                    net.WriteInt(tonumber(NewNameTextEntry:GetValue()),32)
+                                    net.SendToServer()
+                                end
+                            end
+                        end)
+
                         subMenu:AddOption("Change Quantity on Buy", function()
                            local Editframe = vgui.Create("DFrame")
                             wblDebug("Line ID: "..tostring(lineID))

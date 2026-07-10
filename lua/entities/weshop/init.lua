@@ -72,6 +72,8 @@ util.AddNetworkString("wblreqChangeDescweaponToS")
 
 util.AddNetworkString("wblreqChangenameammoToS")
 util.AddNetworkString("wblreqChangepriceammoToS")
+util.AddNetworkString("wblreqChangesellvalammoToS") -- issue #19: admin set ammo sell value
+util.AddNetworkString("wblSellAmmo") -- issue #19: player sells held weapon's reserve ammo
 util.AddNetworkString("wblreqChangeqtyammoToS")
 util.AddNetworkString("wblreqChangemaxqtyammoToS")
 util.AddNetworkString("wblreqdeleteammoToS")
@@ -821,13 +823,14 @@ ammo2price = ammo2pricedefault
 --local wblweaponlist = {}
 --local wblammolist = {}
 
-local function AddAmmo(ammoName, ammoClass, price, quantity, maxQuantity)
+local function AddAmmo(ammoName, ammoClass, price, quantity, maxQuantity, sellValue)
     table.insert(wblammolist, {
         name = ammoName,
         class = ammoClass,
         price = price,
         quantity = quantity,
-        maxquantity = maxQuantity
+        maxquantity = maxQuantity,
+        sellvalue = sellValue or 0  -- issue #19: owner-set ammo sell value (per unit), 0 = unsellable
     })
 end
 
@@ -1495,6 +1498,17 @@ function UpdateAmmoMaxQuantity(ammoclass, newmaxquantity)
         end
     end
     return false -- Indicate that no matching class was found
+end
+
+-- issue #19: set the owner-configured sell value (per unit) for an ammo type.
+function UpdateAmmoSellValue(ammoclass, newsellvalue)
+    for _, ammo in ipairs(wblammolist) do
+        if ammo.class == ammoclass then
+            ammo.sellvalue = newsellvalue
+            return true
+        end
+    end
+    return false
 end
 
 local function ReplaceAmmo1(oldAmmoName, newAmmoName)
@@ -3135,6 +3149,68 @@ net.Receive("wblreqChangepriceammoToS", function(len, wblply)
     UpdateAmmoPrice(ammoClass, NewammoPrice)
     CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
     CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+end)
+
+-- issue #19: admin sets an ammo's sell value.
+net.Receive("wblreqChangesellvalammoToS", function(len, wblply)
+    wblDebug("Change ammo sell value received")
+    local ammoClass = net.ReadString()
+    local NewSellVal = net.ReadInt(32)
+    UpdateAmmoSellValue(ammoClass, NewSellVal)
+    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+end)
+
+-- issue #19: player sells ALL reserve of their held weapon's primary/secondary ammo at
+-- the owner-set per-unit sell value. Server-authoritative -- the value is looked up here,
+-- never trusted from the client. Uses changeMoney so it also works with the #22 pool.
+net.Receive("wblSellAmmo", function(len, ply)
+    local secondary = net.ReadBool() -- false = primary ammo, true = secondary ammo
+    local weapon = ply:GetActiveWeapon()
+    if not (IsValid(weapon) and weapon:GetClass() ~= "none") then
+        net.Start("wblNoWeaponsound")
+        net.Send(ply)
+        return
+    end
+    local foundWeapon = FindWeaponByClass(weapon:GetClass())
+    if foundWeapon == nil then
+        net.Start("wblplydontknowweaponsound")
+        net.Send(ply)
+        return
+    end
+    local ammoName = secondary and foundWeapon.ammo2 or foundWeapon.ammo1
+    if (not ammoName) or ammoName == "N.A." then
+        net.Start("wblplynoammotypesound")
+        net.WriteInt(1, 16)
+        net.Send(ply)
+        return
+    end
+    local ammo = FindAmmoByName(ammoName)
+    if ammo == nil then
+        net.Start("wblbutton1soundother")
+        net.WriteInt(1, 16)
+        net.Send(ply)
+        return
+    end
+    local sellval = tonumber(ammo.sellvalue) or 0
+    if sellval <= 0 then
+        -- unsellable (the default) -- reuse the "not sellable" feedback path
+        net.Start("wblonlyweaponsound")
+        net.WriteInt(2, 16)
+        net.Send(ply)
+        return
+    end
+    local reserve = ply:GetAmmoCount(ammo.class)
+    if reserve <= 0 then
+        net.Start("wblplynoammotypesound")
+        net.WriteInt(1, 16)
+        net.Send(ply)
+        return
+    end
+    -- Sell all reserve of this ammo type at the per-unit value.
+    AddReserveAmmo(ply, ammo.class, -reserve)
+    changeMoney(ply, sellval * reserve)
+    net.Start("wblSellweaponsound")
+    net.Send(ply)
 end)
 
 net.Receive("wblreqChangeqtyammoToS", function(len, wblply)
