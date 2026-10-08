@@ -3,7 +3,11 @@
 -- The server only runs this file so it can send it to the client
 --
 
-if ( SERVER ) then AddCSLuaFile( "Weshop_Menu.lua" ) return end
+-- Filename must match the file on disk EXACTLY. "Weshop_Menu.lua" resolved on a
+-- Windows dev box and failed on a case-sensitive (Linux) dedicated server, where
+-- AddCSLuaFile then sent nothing and clients got no admin menu at all. Workshop
+-- mounts ship the whole GMA so they hid this; a loose install did not.
+if ( SERVER ) then AddCSLuaFile( "weshop_menu.lua" ) return end
 
 wbldeben = 0
 

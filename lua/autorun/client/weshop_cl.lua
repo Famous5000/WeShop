@@ -422,7 +422,9 @@ end)
 --end)
 
 net.Receive("wblEnableShopbuy", function()
-    local myIcon = Material("materials/Cart.png") -- Replace with the actual path to your PNG file
+    -- Lowercase: gmad lowercases paths when packing and a mounted GMA is looked
+    -- up case-sensitively, so "Cart.png" only ever resolved in development.
+    local myIcon = Material("materials/cart.png")
 
     hook.Add("HUDPaint", "DrawMyIcon", function()
         -- Define the position for the icon

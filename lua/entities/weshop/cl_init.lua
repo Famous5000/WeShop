@@ -301,17 +301,21 @@ local remnumbut = #wblweaponlist
 			name:SetImageColor(Color(255, 255, 255, 150))
 		end
 
+		-- Paths are lowercase to match the files on disk. gmad lowercases every
+		-- path when it builds the addon, and lookups inside a mounted GMA are
+		-- case-sensitive -- so "materials/HP.png" resolves from a loose Windows
+		-- folder during development and then silently fails once published.
 		--Medkit Icon
-		CreateIconframe(WeshopMedkit, "materials/HP.png", 870, 170)
-		
+		CreateIconframe(WeshopMedkit, "materials/hp.png", 870, 170)
+
 		--Armor Icon
-		CreateIconframe(WeshopBattery, "materials/AP.png", 870, 307.5)
+		CreateIconframe(WeshopBattery, "materials/ap.png", 870, 307.5)
 
 		--Primary Ammo Icon
-		CreateIconframe(WeshopAmmo1, "materials/PA.png", 870, 445)
+		CreateIconframe(WeshopAmmo1, "materials/pa.png", 870, 445)
 
 		--Secondary Ammo Icon
-		CreateIconframe(WeshopAmmo2, "materials/SA.png", 870, 582.5)
+		CreateIconframe(WeshopAmmo2, "materials/sa.png", 870, 582.5)
 
 		--Scroll Panel for Button Categories
 		local CatscrollPanel = vgui.Create("DScrollPanel", wblBuyMenu)
