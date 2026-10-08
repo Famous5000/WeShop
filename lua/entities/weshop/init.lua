@@ -2153,9 +2153,20 @@ end
     catalogue edited mid-transfer is discarded rather than half-applied.
 -----------------------------------------------------------------------------]]
 
--- 16 KiB of payload per message: a quarter of the engine cap, which leaves room
--- for the header and for the reliable channel to carry other traffic alongside.
-local CATALOGUE_CHUNK_BYTES = 16384
+-- 48 KiB of payload per message, ~75% of GMod's 64 KiB net cap.
+--
+-- Sitting this close to the cap is only safe because the size is MEASURED, not
+-- estimated: the blob is compressed first and sliced by byte count, so a chunk
+-- is exactly this big and never one description string larger than expected.
+-- The header costs 12 bytes (ver 32 + idx 16 + total 16 + len 32) plus a couple
+-- for the message name, against ~16 KiB of headroom -- four orders of magnitude
+-- of slack, and it does not grow with the catalogue.
+--
+-- Total bytes on the wire are unchanged by this number; it only trades message
+-- count against message size, and fewer messages means less per-message
+-- overhead on the reliable channel. The overflow fix was addressing the send,
+-- not the chunk size.
+local CATALOGUE_CHUNK_BYTES = 49152
 
 -- NOT FCVAR_ARCHIVE on purpose. It must come back as 0 on a fresh server, or a
 -- stale value would persist and clients would skip a pull they needed.
