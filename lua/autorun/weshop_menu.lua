@@ -324,32 +324,158 @@ local function GetWeaponSpawnCategory(weaponClass)
     end
 end
 
-local function ReceiveAndDecompressTable()
-    -- Read the length of the compressed data
-    local dataLength = net.ReadUInt(32)
+--[[---------------------------------------------------------------------------
+    CATALOGUE SYNC  --  client half.  Server half: entities/weshop/init.lua.
 
-    -- Read the compressed data
-    local compressedData = net.ReadData(dataLength)
+    The server never pushes the catalogue. It bumps the replicated ConVar
+    `wbl_shopVer` on every admin change, which costs no net message. This client
+    holds `cl_localShop`, starting at -1, and pulls only when the player opens a
+    shop and the two differ.
 
-    -- Decompress the data
-    local jsonData = util.Decompress(compressedData)
+    -1 and not 0 on purpose: the server forces wbl_shopVer to 0 at startup, so a
+    client sitting on 0 would compare equal to a server it had never synced with
+    and render an empty shop.
 
-    -- Make sure decompression worked
+    The reply arrives as ordered chunks. Each carries the version it belongs to,
+    so a catalogue edited mid-transfer is dropped rather than half-applied, and
+    an intermediate chunk NEVER overwrites the live list -- the old code assigned
+    the return value unconditionally, which would have blanked the shop on every
+    chunk but the last.
+-----------------------------------------------------------------------------]]
+
+cl_localShop = -1
+
+local chunkBuf           = {}       -- [tag] = { ver, total, parts = {} }
+local gotVer             = {}       -- [tag] = version fully received
+local pendingPull        = false
+local pullCallbacks      = {}
+local catalogueListeners = {}       -- [name] = fn, named so re-opening a menu replaces
+
+-- Register a refresh to run whenever a complete catalogue lands. Named rather
+-- than anonymous because the admin menu re-registers its refreshers every time
+-- it is built, and net.Receive-style stacking would run them N times over.
+function WeShopOnCatalogue(name, fn)
+    catalogueListeners[name] = fn
+end
+
+local function FireCatalogueCallbacks()
+    local waiting = pullCallbacks
+    pullCallbacks = {}
+    pendingPull = false
+
+    for _, fn in pairs(catalogueListeners) do
+        local ok, err = pcall(fn)
+        if not ok then ErrorNoHalt("[WeShop] catalogue listener failed: " .. tostring(err) .. "\n") end
+    end
+    for _, fn in ipairs(waiting) do
+        local ok, err = pcall(fn)
+        if not ok then ErrorNoHalt("[WeShop] catalogue callback failed: " .. tostring(err) .. "\n") end
+    end
+end
+
+-- Both lists must land, at the SAME version, before the catalogue counts as
+-- synced. Committing on the first of the two would leave the shop showing new
+-- weapons priced against old ammo.
+local function CatalogueMaybeReady()
+    if not gotVer.weapons or gotVer.weapons ~= gotVer.ammo then return end
+
+    cl_localShop = gotVer.weapons
+    timer.Remove("WeShopCataloguePullTimeout")
+    wblDebug("Catalogue synced at version " .. cl_localShop)
+    FireCatalogueCallbacks()
+end
+
+-- Returns the finished table only on the final chunk; nil at every other point,
+-- which callers must treat as "nothing to do", not as "empty catalogue".
+local function ReceiveAndDecompressTable(tag)
+    local ver   = net.ReadUInt(32)
+    local idx   = net.ReadUInt(16)
+    local total = net.ReadUInt(16)
+    local len   = net.ReadUInt(32)
+    local part  = net.ReadData(len)
+
+    local buf = chunkBuf[tag]
+    if idx == 1 or not buf or buf.ver ~= ver then
+        buf = { ver = ver, total = total, parts = {} }
+        chunkBuf[tag] = buf
+    end
+    buf.parts[idx] = part
+
+    if idx < total then return nil end
+
+    for i = 1, total do
+        if not buf.parts[i] then
+            wblDebug("Catalogue " .. tag .. ": chunk " .. i .. "/" .. total .. " missing, discarding transfer")
+            chunkBuf[tag] = nil
+            return nil
+        end
+    end
+
+    chunkBuf[tag] = nil
+
+    local jsonData = util.Decompress(table.concat(buf.parts))
     if not jsonData then
-        print("Failed to decompress data")
+        print("[WeShop] Failed to decompress " .. tag .. " catalogue")
         return nil
     end
 
-    -- Convert the JSON string back into a Lua table
-    return util.JSONToTable(jsonData)
+    local tbl = util.JSONToTable(jsonData)
+    if not tbl then
+        print("[WeShop] " .. tag .. " catalogue was not valid JSON")
+        return nil
+    end
+
+    return tbl, ver
 end
 
-net.Receive("wbladdammolistToC",function(Len)
-    wblammolist = ReceiveAndDecompressTable()
+net.Receive("wbladdammolistToC", function()
+    local tbl, ver = ReceiveAndDecompressTable("ammo")
+    if not tbl then return end
+    wblammolist = tbl
+    gotVer.ammo = ver
+    CatalogueMaybeReady()
 end)
-net.Receive("wbladdweaponlistToC",function(Len)
-    wblweaponlist = ReceiveAndDecompressTable()
+
+net.Receive("wbladdweaponlistToC", function()
+    local tbl, ver = ReceiveAndDecompressTable("weapons")
+    if not tbl then return end
+    wblweaponlist = tbl
+    gotVer.weapons = ver
+    CatalogueMaybeReady()
 end)
+
+--- Make sure the catalogue is current, then run `onReady`.
+--  Call this before opening anything that renders the catalogue. If nothing has
+--  changed it runs the callback immediately and sends not a single byte.
+function WeShopEnsureCatalogue(onReady)
+    local cv = GetConVar("wbl_shopVer")
+
+    -- cv missing means the replicated value has not arrived yet; pull rather
+    -- than assume, or a mid-join open would render an empty shop forever.
+    if cv and cl_localShop == cv:GetInt() then
+        if onReady then onReady() end
+        return
+    end
+
+    if onReady then table.insert(pullCallbacks, onReady) end
+    if pendingPull then return end
+
+    pendingPull = true
+    gotVer = {}
+    chunkBuf = {}
+
+    -- A pull that never lands must not leave the shop permanently unopenable.
+    -- On timeout we open anyway with whatever is cached; stale beats dead.
+    timer.Create("WeShopCataloguePullTimeout", 10, 1, function()
+        if not pendingPull then return end
+        print("[WeShop] Catalogue request timed out; opening with cached data.")
+        FireCatalogueCallbacks()
+    end)
+
+    wblDebug("Catalogue stale (local " .. cl_localShop .. "), requesting from server")
+    net.Start("wblReqCatalogue")
+    net.SendToServer()
+end
 
 hook.Add( "AddToolMenuCategories", "Weshop_option", function()
 	spawnmenu.AddToolCategory( "Options", "WeShopAdm", "#WeShop Admin" )
@@ -376,6 +502,11 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
 				        panel:Help("Admin only access..")
 				        return
 				end
+
+				-- The admin lists render the catalogue, and nothing is pushed any
+				-- more, so pull it if this client is behind. The WeShopOnCatalogue
+				-- listeners registered below refresh the lists when it lands.
+				WeShopEnsureCatalogue()
 
 				local For0 = vgui.Create("DForm")
 				For0:Dock(TOP)
@@ -567,12 +698,10 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
 
                     
 
-                    net.Receive("wbladdammolistToC",function(Len)
-                        wblammolist = ReceiveAndDecompressTable()
-                        if wblammolist then
-                            RefreshAmmolist()
-                        end
-                        wblDebug("wblammolist ammo received client")
+                    -- See the note on the other WeShopOnCatalogue pair below: this was a
+                    -- net.Receive that shadowed the real catalogue handler.
+                    WeShopOnCatalogue("AmmoPanelList", function()
+                        if wblammolist then RefreshAmmolist() end
                     end)
 
 					local AddWeaponAmmo = vgui.Create( "DButton", Forrm ) // Create the button and parent it to the frame
@@ -2843,22 +2972,17 @@ hook.Add( "PopulateToolMenu", "WeshopCustomMenuSettings", function()
                         menuu:Open()
                     end
 					
-					-- Network receive to update ammo list
-					net.Receive("wbladdammolistToC",function(Len)
-						wblammolist = ReceiveAndDecompressTable()
-                        if wblammolist then
-                            RefreshAmmolist()
-                        end
-                        wblDebug("wblammolist ammo received client")
+					-- Refresh the admin lists whenever a complete catalogue lands.
+					-- These used to be net.Receive registrations, which OVERWROTE the
+					-- real catalogue handlers at the top of this file the first time the
+					-- admin menu was built -- and they assigned the decoder's return
+					-- value straight onto the list, so a chunked transfer would blank it.
+					WeShopOnCatalogue("AdminAmmoList", function()
+						if wblammolist then RefreshAmmolist() end
 					end)
 
-					net.Receive("wbladdweaponlistToC",function(Len)
-						wblweaponlist = ReceiveAndDecompressTable()
-                        if wblweaponlist then
-                            wblDebug("Updated weapon list received")
-                            RefreshWeaponlist()
-                        end
-                        wblDebug("wblweaponlist ammo received client")
+					WeShopOnCatalogue("AdminWeaponList", function()
+						if wblweaponlist then RefreshWeaponlist() end
 					end)
 					
 				For0:AddItem(WepPresetLabel)

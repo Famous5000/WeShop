@@ -1560,12 +1560,11 @@ local function HandleWBLBuy(c)
         ammo2price = "N.A."
     end
 
-    if once == 1 then
-        CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, c)
-        CompressAndSendTable("wbladdammolistToC", wblammolist, c)
-        wblDebug("UPDATED WEAPON LIST TO CLIENT")
-        once = 0
-    end
+    -- No catalogue push here any more; the client pulls on wblWinPop if its
+    -- cl_localShop differs from the replicated wbl_shopVer. As in weshoponwall,
+    -- `wblweaponlist` resolved to an empty GLOBAL here -- the real catalogue is
+    -- a file-local in entities/weshop/init.lua, which is where the pull handler
+    -- now lives.
     updatepricesinstore(c)
     net.Start("wblWinPop") --Starts the "WinPop" signal/channel for client
     remammo = -1
@@ -1907,8 +1906,12 @@ end)
 
 hook.Add( "PlayerInitialSpawn", "Moneyinit", function( ply )
     --ply:RemovePData("wblmoney")
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, ply)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, ply)
+    -- 🚩 The catalogue used to be sent HERE, and broadcast to every player on
+    -- every join. PlayerInitialSpawn is also the worst possible moment for a
+    -- large reliable message: the joining client is still working through the
+    -- signon stream, which is why the overflow kick named "Client 0".
+    -- The client now starts at cl_localShop = -1 and pulls when it first opens
+    -- a shop, so nothing is sent until the player actually asks for one.
     local plysinglecp = tonumber(wblmonsingleplayercampaignmode:GetInt())
     local players = player.GetAll() -- Get a list of all players
     if plysinglecp == 1 and #players == 1 then

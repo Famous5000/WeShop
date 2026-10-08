@@ -220,8 +220,14 @@ net.Receive("wblupdatepricetoClient",function()
 
 end)
 
---Signal "WinPop" received from server when entity is used by player
-net.Receive("wblWinPop",function()	
+--Signal "WinPop" received from server when entity is used by player.
+--
+-- The build is a function now rather than the receiver body itself, because the
+-- catalogue is PULLED instead of pushed: the server no longer ships the weapon
+-- list ahead of this signal, so the menu has to wait until the list it renders
+-- has actually arrived. WeShopEnsureCatalogue runs this immediately when
+-- cl_localShop already matches wbl_shopVer, which is the common case.
+local function WblBuildShopMenu()
 
 wblBuyMenu = vgui.Create("DFrame")
 wblBuyMenu:SetSize(1280*Adjw, 720*Adjh)
@@ -1185,7 +1191,18 @@ local remnumbut = #wblweaponlist
 	]]
 
 
-		
+
+end
+
+net.Receive("wblWinPop", function()
+	-- Pull the catalogue first if this client's copy is stale, then build.
+	-- Nil-guarded because weshop_menu.lua owns WeShopEnsureCatalogue and nothing
+	-- guarantees its load order relative to this file.
+	if WeShopEnsureCatalogue then
+		WeShopEnsureCatalogue(WblBuildShopMenu)
+	else
+		WblBuildShopMenu()
+	end
 end)
 
 --Stop the player from moving when touching the store until done
