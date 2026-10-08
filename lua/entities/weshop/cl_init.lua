@@ -206,7 +206,7 @@ net.Receive("wblupdatepricetoClient",function()
 		ammo1price = "( N.A.)"
 		ammo1pricefull = "( N.A.)"
 	else
-		ammo1price = "( ω"..ammo1.." )"
+		ammo1price = "( "..WblCurrency()..""..ammo1.." )"
 		ammo1pricefull = "( varies )"
 	end
 
@@ -214,7 +214,7 @@ net.Receive("wblupdatepricetoClient",function()
 		ammo2price = "( N.A.)"
 		ammo2pricefull = "( N.A.)"
 	else
-		ammo2price = "( ω"..ammo2.." )"
+		ammo2price = "( "..WblCurrency()..""..ammo2.." )"
 		ammo2pricefull = "( varies )"
 	end
 
@@ -366,8 +366,19 @@ local remnumbut = #wblweaponlist
 			end
 
 		
-		    -- Add buttons to the scroll panel
-		    for k, v in ipairs(wblweaponlistaftcat.weapons) do
+		    -- Add buttons to the scroll panel. Optional alphabetical sort (issue #24):
+		    -- when the client convar weshop_sort_alpha is on, display a name-sorted COPY
+		    -- of this category's weapons -- never mutating the server-side order. The
+		    -- `or {}` also defends the client render against a nil weapons list.
+		    local weaponsToShow = wblweaponlistaftcat.weapons or {}
+		    local sortCvar = GetConVar("weshop_sort_alpha")
+		    if sortCvar and sortCvar:GetBool() then
+		        weaponsToShow = table.Copy(weaponsToShow)
+		        table.sort(weaponsToShow, function(a, b)
+		            return tostring(a.name):lower() < tostring(b.name):lower()
+		        end)
+		    end
+		    for k, v in ipairs(weaponsToShow) do
 			        local button = scrollPanel:Add("DButton")
 			        button:SetText("")
 			        button:SetSize(400*Adjw, 40*Adjh)
@@ -379,7 +390,7 @@ local remnumbut = #wblweaponlist
 					local BackModelPanel, BackTitlePanel, BackDescPanel
 					local ModelPanel, TitlePanel, DescPanel
 					local finalname = "("..k..") "..v.name -- change to truncate the dot dot
-					local finalcost = "ω"..v.cost
+					local finalcost = ""..WblCurrency()..""..v.cost
 
 
 
@@ -857,6 +868,36 @@ local remnumbut = #wblweaponlist
 
 		end
 
+		-- issue #19: sell-ammo button. Sells ALL reserve of the held weapon's primary or
+		-- secondary ammo (server decides value/eligibility). secondary=false -> primary.
+		local function CreateSellAmmoButton(xposition, yposition, label, secondary)
+			local name = vgui.Create("DButton", wblBuyMenu)
+			name:SetSize(150*Adjw, 50*Adjh)
+			name:SetText("")
+			name:SetFont("Buybutton")
+			name:SetPos( xposition*Adjw, yposition*Adjh )
+			name.isClicked = false
+			name.isHovered = false
+			function name:Paint(w, h)
+				local col = Color(0, 0, 0, 0)
+				if name.isClicked then col = Color(255, 170, 0, 90)
+				elseif name.isHovered then col = Color(255, 170, 0, 45) end
+				draw.RoundedBox(0, 0, 0, w, h, col)
+				surface.SetDrawColor(255, 170, 0, 150)
+				surface.DrawOutlinedRect(0, 0, w, h, 2)
+				draw.SimpleText(label, "Buybutton", w / 2, h / 2, Color(255, 170, 0, 200), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+			end
+			name.OnCursorEntered = function() name.isHovered = true end
+			name.OnCursorExited = function() name.isHovered = false end
+			name.OnMousePressed = function() name.isClicked = true end
+			name.OnMouseReleased = function()
+				name.isClicked = false
+				net.Start("wblSellAmmo")
+				net.WriteBool(secondary)
+				net.SendToServer()
+			end
+		end
+
 		--MADE NEW ONE FOR KEY PRESS ON PRIMARY AMMO
 		local function CreateBuyButtonPrimaryAmmoKEY(name, frame, fontdefault, fontclick, xposition, yposition, label, netsend)
 			local name = vgui.Create("DButton", wblBuyMenu)
@@ -989,25 +1030,25 @@ local remnumbut = #wblweaponlist
 		CreateBuyButton(WeshopMedkitBuy1button, wblBuyMenu, "Buybutton", "ClickedBuybutton", 1000, 165, "Buy 10 Health", "wblplybought10hp")
 
 		--Price Label for 10HP button
-		CreatePriceDlabel(WeshopMedkitLabel1, wblBuyMenu, 1170, 165, "( ω"..HP10price.." )")
+		CreatePriceDlabel(WeshopMedkitLabel1, wblBuyMenu, 1170, 165, "( "..WblCurrency()..""..HP10price.." )")
 		
 		--Buy 25HP button
 		CreateBuyButton(WeshopMedkitBuy2button, wblBuyMenu, "Buybutton", "ClickedBuybutton", 1000, 220, "Buy 25 Health", "wblplybought25hp")
 
 		--Price Label for 25HP button
-		CreatePriceDlabel(WeshopMedkitLabel2, wblBuyMenu, 1170, 220, "( ω"..HP25price.." )")
+		CreatePriceDlabel(WeshopMedkitLabel2, wblBuyMenu, 1170, 220, "( "..WblCurrency()..""..HP25price.." )")
 		    
 		--Buy 10AP button
 		CreateBuyButton(WeshopBattery1button, wblBuyMenu, "Buybutton", "ClickedBuybutton", 1000, 302.5, "Buy 10 Armor", "wblplybought10ap")
 		
 		--Price Label for 10AP button
-		CreatePriceDlabel(WeshopBattery1Label, wblBuyMenu, 1170, 302.5, "( ω"..AP10price.." )")
+		CreatePriceDlabel(WeshopBattery1Label, wblBuyMenu, 1170, 302.5, "( "..WblCurrency()..""..AP10price.." )")
 
 		--Buy 25AP button
 		CreateBuyButton(WeshopBattery2button, wblBuyMenu, "Buybutton", "ClickedBuybutton", 1000, 357.5, "Buy 25 Armor", "wblplybought25ap")
 		
 		--Price Label for 25AP button
-		CreatePriceDlabel(WeshopBattery2Label, wblBuyMenu, 1170, 357.5, "( ω"..AP25price.." )")
+		CreatePriceDlabel(WeshopBattery2Label, wblBuyMenu, 1170, 357.5, "( "..WblCurrency()..""..AP25price.." )")
 
 		--Buy 1 Primary ammo button
 		CreateBuyButtonPrimaryAmmoKEY(WeshopPrimammo1button, wblBuyMenu, "Buybuttonammo", "ClickedBuybuttonammo", 1000, 440, "Buy Ammo", "wblplybought1primeammo")
@@ -1033,6 +1074,11 @@ local remnumbut = #wblweaponlist
 		--Price Label for all Primary ammo button
 		CreatePriceDlabel(WeshopSecammo2Label, wblBuyMenu, 1170, 632.5, ammo2pricefull)
 
+		-- issue #19: sell-ammo buttons -- sell ALL reserve of the held weapon's ammo type.
+		-- Positions are a first guess; nudge xposition/yposition to taste.
+		CreateSellAmmoButton(1320, 440, "Sell Ammo", false)
+		CreateSellAmmoButton(1320, 577.5, "Sell Alt Ammo", true)
+
 		wblBuyMenu.OnKeyCodePressed = function(self, keyCode)
 			if keyCode == KEY_E or keyCode == KEY_B then
 		        self:Close()
@@ -1054,7 +1100,7 @@ local remnumbut = #wblweaponlist
 			name.isHovered = false -- New variable to track hover state
 			local finalsellvalue
 			if weapsellvalue ~= "N.A." then
-				finalsellvalue = "( ω"..weapsellvalue.." )"
+				finalsellvalue = "( "..WblCurrency()..""..weapsellvalue.." )"
 			else
 				finalsellvalue = "( "..weapsellvalue.." )"
 			end

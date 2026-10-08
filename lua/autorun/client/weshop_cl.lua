@@ -5,6 +5,10 @@ wblfontoffset = 40
 Adjw = (ScrW()/1920)
 Adjh = (ScrH()/1080)
 
+-- Client display preference (issue #24): sort the shop weapon list alphabetically
+-- within each category. Off by default (preserves the admin-defined order).
+CreateClientConVar("weshop_sort_alpha", "0", true, false, "Sort the WeShop weapon list alphabetically within each category")
+
 
 surface.CreateFont( "pont_1", {
 	font = "Arial", 
@@ -162,11 +166,11 @@ function MoneyGetLabel(a)
     local TxtG = 0
     local b = 0
     if a > 0 then
-    	b = "+ ω" .. tostring(Accumonz)
+    	b = "+ "..WblCurrency().."" .. tostring(Accumonz)
     	TxtG = 255
     	TxtR = 0
 	elseif a < 0 then
-	    b = "- ω" .. tostring((-1)*Accumonz)
+	    b = "- "..WblCurrency().."" .. tostring((-1)*Accumonz)
 	    TxtG = 0
 	    TxtR = 255
 	else
@@ -191,7 +195,7 @@ end
 	--OPTIMIZE IS POSSIBLE
 function updatewblmoney(a) 
 	--if wblhuden == 0 then return end
-	local b = "ω"..tostring(a)
+	local b = ""..WblCurrency()..""..tostring(a)
 	local TTT = 0.02
 
 	timer.Remove("tpont_1")
@@ -268,7 +272,7 @@ end
 
 function updatewblmoneylose(a) 
 	--if wblhuden == 0 then return end
-	local b = "ω"..tostring(a)
+	local b = ""..WblCurrency()..""..tostring(a)
 	local TTT = 0.02
 
 	timer.Remove("tpont_1")

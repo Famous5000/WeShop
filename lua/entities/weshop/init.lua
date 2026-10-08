@@ -72,6 +72,8 @@ util.AddNetworkString("wblreqChangeDescweaponToS")
 
 util.AddNetworkString("wblreqChangenameammoToS")
 util.AddNetworkString("wblreqChangepriceammoToS")
+util.AddNetworkString("wblreqChangesellvalammoToS") -- issue #19: admin set ammo sell value
+util.AddNetworkString("wblSellAmmo") -- issue #19: player sells held weapon's reserve ammo
 util.AddNetworkString("wblreqChangeqtyammoToS")
 util.AddNetworkString("wblreqChangemaxqtyammoToS")
 util.AddNetworkString("wblreqdeleteammoToS")
@@ -821,13 +823,14 @@ ammo2price = ammo2pricedefault
 --local wblweaponlist = {}
 --local wblammolist = {}
 
-local function AddAmmo(ammoName, ammoClass, price, quantity, maxQuantity)
+local function AddAmmo(ammoName, ammoClass, price, quantity, maxQuantity, sellValue)
     table.insert(wblammolist, {
         name = ammoName,
         class = ammoClass,
         price = price,
         quantity = quantity,
-        maxquantity = maxQuantity
+        maxquantity = maxQuantity,
+        sellvalue = sellValue or 0  -- issue #19: owner-set ammo sell value (per unit), 0 = unsellable
     })
 end
 
@@ -900,6 +903,135 @@ local function SpawnWeapononme(ply, weaponClass)
     else
         wblDebug("Failed to create the weapon entity.")
     end
+    -- Return the entity so callers can detect a failed spawn (invalid on failure).
+    return weapon
+end
+
+-- Spawn a bought "ENT" catalogue item where the buyer is aiming. Handles two cases:
+--   * Scripted entities / props -> ents.Create on the class (old path, SpawnWeapononme).
+--   * Spawn-menu NPCs -> the shop "class" is really an NPC-list KEY (e.g.
+--     "npc_rollermine_hacked") that maps to a real base class ("npc_rollermine")
+--     PLUS spawnflags/keyvalues. ents.Create on the key alone returns NULL -- that's
+--     the "Attempted to create unknown entity type" bug (issue #26).
+-- This is a faithful port of sandbox's InternalSpawnNPC, MINUS the AdminOnly gate
+-- (an admin who lists an NPC in the shop meant it to be purchasable). Ownership
+-- matches the existing entity buy: ownerless (no creator / undo / cleanup).
+local function SpawnBoughtEntity(ply, class)
+    if not IsValid(ply) or not ply:IsPlayer() then return end
+
+    local NPCData = list.GetEntry and list.GetEntry("NPC", class) or list.Get("NPC")[class]
+    if not NPCData or not NPCData.Class then
+        -- Not an NPC-list entry -> scripted entity / prop (unchanged behavior).
+        return SpawnWeapononme(ply, class)
+    end
+
+    -- Aim trace from the buyer's eyes, same as sandbox GetSpawnTrace.
+    local vStart = ply:GetShootPos()
+    local tr = util.TraceLine({
+        start  = vStart,
+        endpos = vStart + ply:EyeAngles():Forward() * 2048,
+        filter = { ply, ply:GetVehicle() }
+    })
+    local Position, Normal = tr.HitPos, tr.HitNormal
+
+    -- Ceiling/floor gating (barnacles / turrets must land on the right surface).
+    local bDropToFloor, wasSpawnedOnCeiling, wasSpawnedOnFloor = false, false, false
+    if NPCData.OnCeiling or NPCData.OnFloor then
+        local isOnCeiling = Vector(0, 0, -1):Dot(Normal) >= 0.95
+        local isOnFloor   = Vector(0, 0,  1):Dot(Normal) >= 0.95
+        if not isOnCeiling and not NPCData.OnFloor then return end
+        if not isOnFloor and not NPCData.OnCeiling then return end
+        if not isOnFloor and not isOnCeiling then return end
+        wasSpawnedOnCeiling, wasSpawnedOnFloor = isOnCeiling, isOnFloor
+    else
+        bDropToFloor = true
+    end
+    if NPCData.NoDrop then bDropToFloor = false end
+
+    local NPC = ents.Create(NPCData.Class)
+    if not IsValid(NPC) then
+        wblDebug("Failed to create NPC entity: " .. tostring(NPCData.Class))
+        return
+    end
+
+    -- Position + facing (face the buyer).
+    NPC:SetPos(Position + Normal * (NPCData.Offset or 32))
+    local Angles = ply:GetAngles()
+    Angles.pitch, Angles.roll = 0, 0
+    Angles.yaw = Angles.yaw + 180
+    if NPCData.Rotate then Angles = Angles + NPCData.Rotate end
+    NPC:SetAngles(Angles)
+    if NPCData.SnapToNormal then NPC:SetAngles(Normal:Angle()) end
+
+    -- Model / material.
+    local NPCModel = NPCData.Model
+    if istable(NPCModel) then NPCModel = NPCModel[math.random(#NPCModel)] end
+    if NPCModel then NPC:SetModel(NPCModel) end
+    if NPCData.Material then NPC:SetMaterial(NPCData.Material) end
+
+    -- Spawn flags (this is what turns npc_rollermine into the *hacked* variant, etc.).
+    local SpawnFlags = bit.bor(SF_NPC_FADE_CORPSE, SF_NPC_ALWAYSTHINK)
+    if NPCData.SpawnFlags then SpawnFlags = bit.bor(SpawnFlags, NPCData.SpawnFlags) end
+    if NPCData.TotalSpawnFlags then SpawnFlags = NPCData.TotalSpawnFlags end
+    NPC:SetKeyValue("spawnflags", SpawnFlags)
+    NPC.SpawnFlags = SpawnFlags
+
+    -- Key values (+ squad-overflow guard, mirroring sandbox).
+    local squadName = nil
+    if NPCData.KeyValues then
+        for k, v in pairs(NPCData.KeyValues) do
+            NPC:SetKeyValue(k, v)
+            if string.lower(k) == "squadname" then squadName = v end
+        end
+    end
+    if squadName and ai.GetSquadMemberCount(squadName) >= 16 then
+        local sqNum = 0
+        while ai.GetSquadMemberCount(squadName .. sqNum) >= 16 do sqNum = sqNum + 1 end
+        NPC:SetKeyValue("SquadName", squadName .. sqNum)
+    end
+
+    if NPCData.Skin then NPC:SetSkin(NPCData.Skin) end
+
+    -- Give the NPC its default listed weapon so combat NPCs actually fight.
+    if istable(NPCData.Weapons) then
+        for _, wep in ipairs(NPCData.Weapons) do
+            if wep and wep ~= "" then
+                NPC:SetKeyValue("additionalequipment", wep)
+                NPC.Equipment = wep
+                break
+            end
+        end
+    end
+
+    -- Surface-specific setup callbacks (function form of OnFloor/OnCeiling).
+    if wasSpawnedOnCeiling and isfunction(NPCData.OnCeiling) then
+        NPCData.OnCeiling(NPC)
+    elseif wasSpawnedOnFloor and isfunction(NPCData.OnFloor) then
+        NPCData.OnFloor(NPC)
+    end
+
+    NPC:Spawn()
+    NPC:Activate()
+
+    NPC.NPCName = class
+    NPC._wasSpawnedOnCeiling = wasSpawnedOnCeiling
+
+    -- Some NPCs reset their model/skin inside Spawn(); re-apply.
+    if NPCModel and NPC:GetModel():lower() ~= NPCModel:lower() then NPC:SetModel(NPCModel) end
+    if NPCData.Skin then NPC:SetSkin(NPCData.Skin) end
+
+    if bDropToFloor then NPC:DropToFloor() end
+
+    if NPCData.Health then
+        NPC:SetHealth(NPCData.Health)
+        NPC:SetMaxHealth(NPCData.Health)
+    end
+    if NPCData.BodyGroups then
+        for k, v in pairs(NPCData.BodyGroups) do NPC:SetBodygroup(k, v) end
+    end
+
+    wblDebug("Spawned NPC '" .. class .. "' (base class " .. NPCData.Class .. ") for " .. ply:Nick())
+    return NPC
 end
 
 local function GiveWeaponToPlayer(ply, weaponClass)
@@ -1204,8 +1336,12 @@ end
 local function RemoveWeaponByClass(weaponClass)
     -- Iterate through the tiers
     for tierIndex, tier in ipairs(wblweaponlist) do
-        -- Iterate through the weapons in each tier
-        for weaponIndex, weapon in ipairs(tier.weapons) do
+        -- Iterate through the weapons in each tier.
+        -- Guard against a nil `weapons` (issue #18): when the list is round-tripped
+        -- through net/preset serialization, a tier whose weapons array was empty can
+        -- come back with weapons == nil, and a bare ipairs(nil) crashes here. The `or {}`
+        -- mirrors line ~2121 which already defends the same loop.
+        for weaponIndex, weapon in ipairs(tier.weapons or {}) do
             if weapon.class == weaponClass then
                 -- Remove the weapon from the tier's weapon list
                 table.remove(tier.weapons, weaponIndex)
@@ -1362,6 +1498,17 @@ function UpdateAmmoMaxQuantity(ammoclass, newmaxquantity)
         end
     end
     return false -- Indicate that no matching class was found
+end
+
+-- issue #19: set the owner-configured sell value (per unit) for an ammo type.
+function UpdateAmmoSellValue(ammoclass, newsellvalue)
+    for _, ammo in ipairs(wblammolist) do
+        if ammo.class == ammoclass then
+            ammo.sellvalue = newsellvalue
+            return true
+        end
+    end
+    return false
 end
 
 local function ReplaceAmmo1(oldAmmoName, newAmmoName)
@@ -1706,7 +1853,15 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
                         GiveWeaponToPlayer(ply, weaponClass)
 		    			--ply:Give(weaponClass)
                     elseif arsenal == "ENT" then
-                        SpawnWeapononme(ply, weaponClass)
+                        local spawnedEnt = SpawnBoughtEntity(ply, weaponClass)
+                        if not IsValid(spawnedEnt) then
+                            -- Spawn failed (bogus class / NULL return) -> refund the money
+                            -- we already deducted above, so a bad entry doesn't eat their cash.
+                            changeMoney(ply, weaponprice)
+                            ply:ChatPrint("[WeShop] That entity failed to spawn - you have been refunded.")
+                            wblBuying = false
+                            return
+                        end
                         net.Start("wblplyboughtweapon")
                         net.WriteUInt(2,8)
                         net.Send(ply)
@@ -1768,7 +1923,14 @@ local function GivePlayerWeapon(ply, weaponClass, weaponprice, arsenal)
                 GiveWeaponToPlayer(ply, weaponClass)
                 --ply:Give(weaponClass)
             elseif arsenal == "ENT" then
-                SpawnWeapononme(ply, weaponClass)
+                local spawnedEnt = SpawnBoughtEntity(ply, weaponClass)
+                if not IsValid(spawnedEnt) then
+                    -- Money system is off here (nothing was charged), so nothing to refund,
+                    -- but still don't tell the player the buy succeeded.
+                    ply:ChatPrint("[WeShop] That entity failed to spawn.")
+                    wblBuying = false
+                    return
+                end
                 net.Start("wblplyboughtweapon")
                 net.WriteUInt(2,8)
                 net.Send(ply)
@@ -2987,6 +3149,68 @@ net.Receive("wblreqChangepriceammoToS", function(len, wblply)
     UpdateAmmoPrice(ammoClass, NewammoPrice)
     CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
     CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+end)
+
+-- issue #19: admin sets an ammo's sell value.
+net.Receive("wblreqChangesellvalammoToS", function(len, wblply)
+    wblDebug("Change ammo sell value received")
+    local ammoClass = net.ReadString()
+    local NewSellVal = net.ReadInt(32)
+    UpdateAmmoSellValue(ammoClass, NewSellVal)
+    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+end)
+
+-- issue #19: player sells ALL reserve of their held weapon's primary/secondary ammo at
+-- the owner-set per-unit sell value. Server-authoritative -- the value is looked up here,
+-- never trusted from the client. Uses changeMoney so it also works with the #22 pool.
+net.Receive("wblSellAmmo", function(len, ply)
+    local secondary = net.ReadBool() -- false = primary ammo, true = secondary ammo
+    local weapon = ply:GetActiveWeapon()
+    if not (IsValid(weapon) and weapon:GetClass() ~= "none") then
+        net.Start("wblNoWeaponsound")
+        net.Send(ply)
+        return
+    end
+    local foundWeapon = FindWeaponByClass(weapon:GetClass())
+    if foundWeapon == nil then
+        net.Start("wblplydontknowweaponsound")
+        net.Send(ply)
+        return
+    end
+    local ammoName = secondary and foundWeapon.ammo2 or foundWeapon.ammo1
+    if (not ammoName) or ammoName == "N.A." then
+        net.Start("wblplynoammotypesound")
+        net.WriteInt(1, 16)
+        net.Send(ply)
+        return
+    end
+    local ammo = FindAmmoByName(ammoName)
+    if ammo == nil then
+        net.Start("wblbutton1soundother")
+        net.WriteInt(1, 16)
+        net.Send(ply)
+        return
+    end
+    local sellval = tonumber(ammo.sellvalue) or 0
+    if sellval <= 0 then
+        -- unsellable (the default) -- reuse the "not sellable" feedback path
+        net.Start("wblonlyweaponsound")
+        net.WriteInt(2, 16)
+        net.Send(ply)
+        return
+    end
+    local reserve = ply:GetAmmoCount(ammo.class)
+    if reserve <= 0 then
+        net.Start("wblplynoammotypesound")
+        net.WriteInt(1, 16)
+        net.Send(ply)
+        return
+    end
+    -- Sell all reserve of this ammo type at the per-unit value.
+    AddReserveAmmo(ply, ammo.class, -reserve)
+    changeMoney(ply, sellval * reserve)
+    net.Start("wblSellweaponsound")
+    net.Send(ply)
 end)
 
 net.Receive("wblreqChangeqtyammoToS", function(len, wblply)
