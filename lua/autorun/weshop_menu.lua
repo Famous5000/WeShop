@@ -481,6 +481,64 @@ function WeShopEnsureCatalogue(onReady)
     net.SendToServer()
 end
 
+--[[---------------------------------------------------------------------------
+    An open shop must not survive an admin edit.
+
+    Pull-on-open means a player holding the shop open keeps rendering the
+    catalogue they pulled when they opened it. An admin who reprices, removes or
+    retypes a weapon in that window leaves them clicking a button that no longer
+    describes anything real -- and the server validates every buy against the
+    LIVE list on the (class, cost) pair, so the click either silently fails or
+    trips the anti-tamper path. Closing the frame sends them back through
+    WeShopEnsureCatalogue on the next open, which re-pulls.
+
+    Stamped with the SERVER's version at build time, NOT cl_localShop. On the
+    10-second-timeout path the frame opens deliberately stale, and comparing
+    against cl_localShop there would slam it shut the instant it appeared --
+    turning "stale beats dead" back into dead.
+
+    Polled from a hook rather than cvars.AddChangeCallback so it does not rest
+    on whether a replicated ConVar fires change callbacks clientside. The hook
+    removes itself the moment no shop is open, so it costs nothing the rest of
+    the time.
+-----------------------------------------------------------------------------]]
+
+local shopOpenAtVer = nil
+
+local function StopShopVerWatch()
+    shopOpenAtVer = nil
+    hook.Remove("Think", "WeShopShopVerWatch")
+end
+
+--- Arm the close-on-change watch. Called by the shop menu once its frame exists.
+function WeShopWatchShopVer()
+    local cv = GetConVar("wbl_shopVer")
+
+    -- No replicated value yet means nothing to compare against; arming here
+    -- would stamp -1 and then close the frame as soon as the real value landed.
+    if not cv then return end
+
+    shopOpenAtVer = cv:GetInt()
+
+    hook.Add("Think", "WeShopShopVerWatch", function()
+        if not IsValid(wblBuyMenu) then StopShopVerWatch() return end
+
+        local live = GetConVar("wbl_shopVer")
+        if not live or live:GetInt() == shopOpenAtVer then return end
+
+        wblDebug("Shop changed (" .. shopOpenAtVer .. " -> " .. live:GetInt() .. "), closing open shop")
+        StopShopVerWatch()
+
+        -- Remove(), not Close(): Close only hides a DFrame. The OnRemove that
+        -- wblFreeze installs is what restores the money HUD position and tells
+        -- the server to unfreeze the player, so hiding would leave them stuck.
+        wblBuyMenu:Remove()
+
+        notification.AddLegacy("The shop was changed -- reopen it.", NOTIFY_GENERIC, 5)
+        surface.PlaySound("buttons/button10.wav")
+    end)
+end
+
 hook.Add( "AddToolMenuCategories", "Weshop_option", function()
 	spawnmenu.AddToolCategory( "Options", "WeShopAdm", "#WeShop Admin" )
 	spawnmenu.AddToolCategory( "Options", "WeShopCli", "#WeShop Client" )

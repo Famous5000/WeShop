@@ -8,6 +8,44 @@ function WblCurrency()
 	return (c and c:GetString() ~= "" and c:GetString()) or "ω"
 end
 
+--[[---------------------------------------------------------------------------
+    REPLICATED ConVars live HERE, above the `if SERVER then`, and nowhere else.
+
+    FCVAR_REPLICATED does not mean "the server creates it and clients receive
+    it". The CreateConVar call has to RUN IN BOTH REALMS; the server's value
+    then wins. Create it only on the server and the client has no such ConVar at
+    all -- GetConVar returns nil there and typing the name in the client console
+    says "Unknown command".
+
+    Measured live on 2026-10-10 against a running server: both `weshop_currency`
+    and `wbl_shopVer` were declared FCVAR_REPLICATED but inside server-only
+    code, and both were Unknown on the client.
+
+    What that silently cost:
+      * WblCurrency() above fell back to the omega on every client, so the
+        weshop_currency setting did nothing clientside -- the exact thing issue
+        #23 asked for.
+      * WeShopEnsureCatalogue's `if cv and cl_localShop == cv:GetInt()` could
+        never be true, so clients re-pulled the WHOLE catalogue on every single
+        shop open instead of once per change.
+      * WeShopWatchShopVer's `if not cv then return end` bailed immediately, so
+        an open shop was never closed when an admin edited the catalogue.
+
+    Neither failed loudly. Both degrade into "works, just wrong", which is why
+    they survived. Put new replicated ConVars in this block.
+-----------------------------------------------------------------------------]]
+
+--Currency symbol shown in the shop (issue #23). Replicated so clients read it.
+CreateConVar( "weshop_currency", "ω", bit.bor( FCVAR_REPLICATED, FCVAR_ARCHIVE, FCVAR_NOTIFY ), "Currency symbol/label displayed in the weapon shop (e.g. $ or credits)" )
+
+-- WeShop catalogue revision. NOT FCVAR_ARCHIVE on purpose: it must come back as
+-- 0 on a fresh server, or a stale saved value would persist and clients would
+-- skip a pull they needed. Declared here rather than beside the rest of the
+-- catalogue code in entities/weshop/init.lua, because that file is server-only
+-- (init.lua AddCSLuaFiles cl_init.lua and shared.lua, never itself).
+CreateConVar( "wbl_shopVer", "0", FCVAR_REPLICATED,
+    "WeShop: catalogue revision. Bumped on every admin change; clients re-pull when it differs from theirs." )
+
 if SERVER then
 
 -- CVARS INIT
@@ -329,8 +367,8 @@ wblmonlospercent = CreateConVar( "wblmoney_moneyloss_percent_amount", 10, FCVAR_
 --Money Divide among players
 wblmonplycoop = CreateConVar( "wblmoney_money_coop", 0, FCVAR_NONE, "0", 0, 1 )
 
---Currency symbol shown in the shop (issue #23). Replicated so clients read it.
-CreateConVar( "weshop_currency", "ω", bit.bor( FCVAR_REPLICATED, FCVAR_ARCHIVE, FCVAR_NOTIFY ), "Currency symbol/label displayed in the weapon shop (e.g. $ or credits)" )
+-- weshop_currency moved to the shared block at the top of this file. It was
+-- declared here, inside `if SERVER then`, so clients never had it.
 
 --Co-op shared money pool (issue #22). When on, all players share ONE balance.
 wblmonpool = CreateConVar( "weshop_money_pool", 0, bit.bor( FCVAR_ARCHIVE, FCVAR_NOTIFY ), "Co-op: all players share one money pot -- buys, kill/NPC rewards, and death loss all hit the shared balance", 0, 1 )
@@ -645,10 +683,22 @@ net.Receive("wblmonhudenreq", function(len, ply)
     net.Send(ply)
 end)
 
-net.Receive("wblDebugenabledToS", function() 
-    local Debug = tonumber(wblmonDebug:GetInt())
-    net.WriteInt(Debug, 16)
-    net.Broadcast()
+-- Clients ask for this once, as weshop_menu.lua loads, and cache it in wbldeben.
+--
+-- Three bugs lived in these four lines, and together they meant clientside
+-- wblDebug() has never printed anything for anyone:
+--   1. No net.Start. WriteInt and Broadcast were called on a message that was
+--      never begun, so nothing valid was ever sent.
+--   2. net.Broadcast() sends to EVERY player, not the one who asked -- so a
+--      late joiner's request would have re-stamped everyone else.
+--   3. The receiver signature was `function()`, discarding the `ply` argument,
+--      so it could not have replied to the asker even if it wanted to.
+net.Receive("wblDebugenabledToS", function(len, ply)
+    if not IsValid(ply) then return end
+
+    net.Start("wblDebugenabledToC")
+    net.WriteInt(wblmonDebug:GetInt(), 16)
+    net.Send(ply)
 end)
 
 --Receive list of Static Money NPC

@@ -2168,10 +2168,13 @@ end
 -- not the chunk size.
 local CATALOGUE_CHUNK_BYTES = 49152
 
--- NOT FCVAR_ARCHIVE on purpose. It must come back as 0 on a fresh server, or a
--- stale value would persist and clients would skip a pull they needed.
-CreateConVar("wbl_shopVer", "0", FCVAR_REPLICATED,
-    "WeShop: catalogue revision. Bumped on every admin change; clients re-pull when it differs from theirs.")
+-- wbl_shopVer is declared in lua/autorun/weshop.lua, in the shared block above
+-- its `if SERVER then`. It CANNOT live here: this file is server-only (it
+-- AddCSLuaFiles cl_init.lua and shared.lua, never itself), and a replicated
+-- ConVar whose CreateConVar runs in only one realm does not exist in the other.
+-- Declared here, clients had no wbl_shopVer at all -- GetConVar returned nil, so
+-- the version check below could never match and the catalogue was re-sent in
+-- full on every shop open. Verified live 2026-10-10.
 
 -- 2^31-1. ConVars hold a string and GetInt() is a 32-bit signed int, so this is
 -- the real ceiling. One bump per admin edit, reset every server start -- it is
