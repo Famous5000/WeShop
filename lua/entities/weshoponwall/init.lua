@@ -65,12 +65,10 @@ function ENT:Use(a, c)  --c is the player, dunno who is a
         ammo1price = "N.A."
         ammo2price = "N.A."
     end
-    if once == 1 then
-        CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, c)
-        CompressAndSendTable("wbladdammolistToC", wblammolist, c)
-        wblDebug("UPDATED WEAPON LIST TO CLIENT")
-        once = 0
-    end
+    -- No catalogue push here any more; the client pulls on wblWinPop if its
+    -- cl_localShop differs from the replicated wbl_shopVer. These two calls were
+    -- also sending the WRONG table: `wblweaponlist` is a file-local in
+    -- entities/weshop/init.lua, so the name resolved to an empty global here.
     updatepricesinstore(c)
     net.Start("wblWinPop") --Starts the "WinPop" signal/channel for client
     remammo = -1

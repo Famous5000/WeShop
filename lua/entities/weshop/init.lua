@@ -16,6 +16,9 @@ util.AddNetworkString("wbladdweaponlistToS")
 util.AddNetworkString("wbladdweaponlistToC")
 util.AddNetworkString("wbladdammolistToS")
 util.AddNetworkString("wbladdammolistToC")
+-- Client -> server "my catalogue is stale, send it". See the catalogue version
+-- block further down for why the catalogue is PULLED rather than pushed.
+util.AddNetworkString("wblReqCatalogue")
 --util.AddNetworkString("wblUpdateWepAmmolistToS")
 --util.AddNetworkString("wblUpdateWepAmmolistToC")
 
@@ -2117,26 +2120,147 @@ local function GiveAP(ply, APamount, APprice)
 	    end
 end
 
+--[[---------------------------------------------------------------------------
+    CATALOGUE SYNC  --  versioned pull, chunked transfer
+
+    🚩 This replaces a push model that kicked players off the server.
+    Reported: "Adding too many weapons to the shop causes you to be kicked
+    (Client 0 overflowed reliable channel.)"
+
+    What the old code did: CompressAndSendTable took a `ply` argument, IGNORED
+    it, and called net.Broadcast(). Roughly 30 call sites -- every admin edit,
+    every shop open, every PlayerInitialSpawn -- therefore shipped the ENTIRE
+    weapon catalogue AND ammo catalogue to EVERY player. Adding weapons one at a
+    time meant one full broadcast per weapon, to everybody, each one bigger than
+    the last. That is O(players x edits x catalogue) of reliable traffic, and the
+    reliable channel is what overflows.
+
+    What happens now:
+      * `wbl_shopVer` is a replicated ConVar, 0 at server start, +1 on every
+        admin change. Replication is engine-side, so a change costs no net
+        message at all.
+      * Nothing is pushed. Ever. The client keeps `cl_localShop` (-1 at join),
+        compares it to `wbl_shopVer` when the player OPENS the shop, and only
+        then asks for the catalogue.
+      * The reply is split into CHUNK_BYTES slices so no single net message can
+        approach GMod's 64 KiB per-message cap. Slice size is measured off the
+        already-compressed blob, so it is exact -- a weapon count could not be,
+        because entry size is dominated by the description string.
+
+    Ordering note: chunks are sent reliably and in order, so the client can
+    simply reset its buffer on chunk 1 and commit on chunk `total`. No sequence
+    negotiation is needed. The version is stamped on every chunk anyway so a
+    catalogue edited mid-transfer is discarded rather than half-applied.
+-----------------------------------------------------------------------------]]
+
+-- 48 KiB of payload per message, ~75% of GMod's 64 KiB net cap.
+--
+-- Sitting this close to the cap is only safe because the size is MEASURED, not
+-- estimated: the blob is compressed first and sliced by byte count, so a chunk
+-- is exactly this big and never one description string larger than expected.
+-- The header costs 12 bytes (ver 32 + idx 16 + total 16 + len 32) plus a couple
+-- for the message name, against ~16 KiB of headroom -- four orders of magnitude
+-- of slack, and it does not grow with the catalogue.
+--
+-- Total bytes on the wire are unchanged by this number; it only trades message
+-- count against message size, and fewer messages means less per-message
+-- overhead on the reliable channel. The overflow fix was addressing the send,
+-- not the chunk size.
+local CATALOGUE_CHUNK_BYTES = 49152
+
+-- wbl_shopVer is declared in lua/autorun/weshop.lua, in the shared block above
+-- its `if SERVER then`. It CANNOT live here: this file is server-only (it
+-- AddCSLuaFiles cl_init.lua and shared.lua, never itself), and a replicated
+-- ConVar whose CreateConVar runs in only one realm does not exist in the other.
+-- Declared here, clients had no wbl_shopVer at all -- GetConVar returned nil, so
+-- the version check below could never match and the catalogue was re-sent in
+-- full on every shop open. Verified live 2026-10-10.
+
+-- 2^31-1. ConVars hold a string and GetInt() is a 32-bit signed int, so this is
+-- the real ceiling. One bump per admin edit, reset every server start -- it is
+-- not reachable, but wrapping beats overflowing if someone ever manages it.
+local SHOPVER_MAX = 2147483647
+
+function WeShopBumpShopVer()
+    local cv = GetConVar("wbl_shopVer")
+    if not cv then return 0 end
+
+    local nextVer = cv:GetInt() + 1
+    if nextVer > SHOPVER_MAX or nextVer < 0 then nextVer = 1 end
+
+    -- :SetInt and NOT RunConsoleCommand: console commands are queued and run on
+    -- the next frame, so a request arriving in the same frame as an edit would
+    -- be stamped with the pre-edit version. Costs an extra round trip per edit
+    -- and looks like a phantom resync.
+    cv:SetInt(nextVer)
+    wblDebug("Catalogue version bumped to " .. nextVer)
+    return nextVer
+end
+
+function WeShopGetShopVer()
+    local cv = GetConVar("wbl_shopVer")
+    return cv and cv:GetInt() or 0
+end
+
+-- Send one table to ONE player, chunked. `ply` is honoured; it is not optional
+-- any more, because an unaddressed catalogue send is the bug this file fixes.
 function CompressAndSendTable(netString, dataTable, ply)
-    -- Convert the table to a JSON string
-    local jsonData = util.TableToJSON(dataTable)
+    if not IsValid(ply) then
+        wblDebug("Refusing to send " .. netString .. " with no valid recipient")
+        return
+    end
 
-    -- Compress the JSON string
-    local compressedData = util.Compress(jsonData)
+    local jsonData = util.TableToJSON(dataTable or {})
+    local compressedData = jsonData and util.Compress(jsonData)
 
-    -- Make sure compression worked
     if not compressedData then
         wblDebug("Failed to compress data for " .. netString)
         return
     end
 
-    -- Send the compressed data
-    net.Start(netString)
-    net.WriteUInt(#compressedData, 32) -- Write the length of the compressed data
-    net.WriteData(compressedData, #compressedData) -- Write the compressed data
-    net.Broadcast() -- Broadcast to all players
-    wblDebug("Compression and sending of data successful")
+    local size  = #compressedData
+    local total = math.max(1, math.ceil(size / CATALOGUE_CHUNK_BYTES))
+    local ver   = WeShopGetShopVer()
+
+    for i = 1, total do
+        local first = (i - 1) * CATALOGUE_CHUNK_BYTES + 1
+        local part  = string.sub(compressedData, first, first + CATALOGUE_CHUNK_BYTES - 1)
+
+        net.Start(netString)
+        net.WriteUInt(ver, 32)      -- catalogue revision this payload belongs to
+        net.WriteUInt(i, 16)        -- chunk index, 1-based
+        net.WriteUInt(total, 16)    -- how many chunks in this transfer
+        net.WriteUInt(#part, 32)    -- bytes in THIS chunk
+        net.WriteData(part, #part)
+        net.Send(ply)
+    end
+
+    wblDebug(string.format("Sent %s to %s: %d bytes in %d chunk(s), ver %d",
+        netString, ply:Nick(), size, total, ver))
 end
+
+-- The only path that ships a catalogue. Client asks; it gets both lists.
+-- Rate-limited because it is client-triggered and the payload is large.
+local nextCatalogueReq = {}
+
+net.Receive("wblReqCatalogue", function(len, ply)
+    if not IsValid(ply) then return end
+
+    local id = ply:SteamID64() or ply:EntIndex()
+    if (nextCatalogueReq[id] or 0) > CurTime() then
+        wblDebug("Ignoring rapid catalogue request from " .. ply:Nick())
+        return
+    end
+    nextCatalogueReq[id] = CurTime() + 1
+
+    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, ply)
+    CompressAndSendTable("wbladdammolistToC", wblammolist, ply)
+end)
+
+hook.Add("PlayerDisconnected", "WeShopClearCatalogueReq", function(ply)
+    if not IsValid(ply) then return end
+    nextCatalogueReq[ply:SteamID64() or ply:EntIndex()] = nil
+end)
 
 
 -- Toggle for the anti-tamper honeypot/ban. Admins can disable the auto-ban
@@ -2748,12 +2872,9 @@ function ENT:Use(a, c)  --c is the player, dunno who is a
     wblDebug("AP10price: "..AP10price)
     wblDebug("AP25price: "..AP25price)
     wblDebug("defaultsellvalue: "..defaultsellvalue)
-    if once == 1 then
-        CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, c)
-        CompressAndSendTable("wbladdammolistToC", wblammolist, c)
-        wblDebug("UPDATED WEAPON LIST TO CLIENT")
-        once = 0
-    end
+    -- No catalogue push here any more. The client compares cl_localShop against
+    -- the replicated wbl_shopVer when it handles wblWinPop below, and pulls only
+    -- if they differ -- so an unchanged shop costs zero bytes on every open.
 	updatepricesinstore(c)
 	net.Start("wblWinPop") --Starts the "WinPop" signal/channel for client
 	remammo = -1
@@ -2906,7 +3027,7 @@ net.Receive("wbladdammolistToS", function(len, wblply)
     local quantity = net.ReadInt(32)
     local maxQuantity = net.ReadInt(32)
     AddAmmo(ammoName, ammoClass, price, quantity, maxQuantity)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 
@@ -2924,7 +3045,7 @@ net.Receive("wbladdweaponlistToS", function(len, wblply)
     local ammo2 = net.ReadString()
     local desc = net.ReadString()
     AddWeapon(tierName, weaponName, arsenalType, class, cost, sellValue, sellable, slotId, ammo1, ammo2, desc)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
     wblDebug("List Written")
     wblDebug("New weapon list: ")
     --PrintTable(wblweaponlist)
@@ -2938,7 +3059,7 @@ net.Receive("wblreqdeleteammoToS", function(len, wblply)
     wblDebug("Removing: "..ammoClass)
     --PrintTable(wblammolist)
     RemoveAmmoByClass(ammoClass)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 
@@ -2946,7 +3067,7 @@ net.Receive("wblreqdeleteweaponToS", function(len, wblply)
     wblDebug("Remove weapon received")
     local wepclass = net.ReadString()
     RemoveWeaponByClass(wepclass)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 --util.AddNetworkString("wblreqlowestcostarrangeToS")
@@ -2959,7 +3080,7 @@ end)
 
 net.Receive("wblreqlowestcostarrange", function(len, wblply)
     wblsortWeaponsByCost(wblweaponlist)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 
@@ -2968,7 +3089,7 @@ net.Receive("wblreqChangenameweaponToS", function(len, wblply)
     local wepclass = net.ReadString()
     local newname = net.ReadString()
     ReplaceWeaponNameByClass(wepclass, newname)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangearsweaponToS", function(len, wblply)
@@ -2982,7 +3103,7 @@ net.Receive("wblreqChangearsweaponToS", function(len, wblply)
         newnameprocessed = "W"
     end
     ReplaceArsenalTypeByClass(wepclass, newnameprocessed)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangecostweaponToS", function(len, wblply)
@@ -2990,7 +3111,7 @@ net.Receive("wblreqChangecostweaponToS", function(len, wblply)
     local wepclass = net.ReadString()
     local newcost = net.ReadInt(32)
     ReplaceWeaponCostByClass(wepclass, newcost)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangeslotweaponToS", function(len, wblply)
@@ -2998,7 +3119,7 @@ net.Receive("wblreqChangeslotweaponToS", function(len, wblply)
     local wepclass = net.ReadString()
     local newslot = net.ReadString()
     ReplaceWeaponSlotIDByClass(wepclass, newslot)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangecatweaponToS", function(len, wblply)
@@ -3006,7 +3127,7 @@ net.Receive("wblreqChangecatweaponToS", function(len, wblply)
     local wepclass = net.ReadString()
     local newcat = net.ReadString()
     MoveWeaponToTier(wepclass, newcat)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangesellvalweaponToS", function(len, wblply)
@@ -3014,7 +3135,7 @@ net.Receive("wblreqChangesellvalweaponToS", function(len, wblply)
     local wepclass = net.ReadString()
     local newsellvalue = net.ReadInt(32)
     ChangeSellValueByClass(wepclass, newsellvalue)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangesellableweaponToS", function(len, wblply)
@@ -3022,7 +3143,7 @@ net.Receive("wblreqChangesellableweaponToS", function(len, wblply)
     local wepclass = net.ReadString()
     local newsellable = net.ReadBool()
     ChangeSellableByClass(wepclass, newsellable)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangeDescweaponToS", function(len, wblply)
@@ -3030,7 +3151,7 @@ net.Receive("wblreqChangeDescweaponToS", function(len, wblply)
     local wepclass = net.ReadString()
     local newdesc = net.ReadString()
     ReplaceWeaponDescByClass(wepclass, newdesc)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 --[[
@@ -3045,7 +3166,7 @@ net.Receive("wblreqMoveupweapon", function(len, wblply)
     local Tier = net.ReadString()
     local weaponname = net.ReadString()
     wblMoveWeaponUp(Tier, weaponname, wblply)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqMovedownweapon", function(len, wblply)
@@ -3053,7 +3174,7 @@ net.Receive("wblreqMovedownweapon", function(len, wblply)
     local Tier = net.ReadString()
     local weaponname = net.ReadString()
     wblMoveWeaponDown(Tier, weaponname, wblply)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblReqWeaponAmmoPresetListToS", function(len, wblply)
@@ -3085,8 +3206,8 @@ net.Receive("wblLoadWeaponlistPresetToS", function(len, wblply)
     else
         LoadWeaponAmmotable(presetname)
     end
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblDeleteWeaponlistPresetToS", function(len, wblply)
@@ -3139,7 +3260,7 @@ net.Receive("wblreqChangenameammoToS", function(len, wblply)
     ReplaceAmmo1(foundammo.name, NewammoName)
     ReplaceAmmo2(foundammo.name, NewammoName)
     UpdateAmmoName(ammoClass, NewammoName)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangepriceammoToS", function(len, wblply)
@@ -3147,8 +3268,8 @@ net.Receive("wblreqChangepriceammoToS", function(len, wblply)
     local ammoClass = net.ReadString()
     local NewammoPrice = net.ReadInt(32)
     UpdateAmmoPrice(ammoClass, NewammoPrice)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
-    CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 -- issue #19: admin sets an ammo's sell value.
@@ -3157,7 +3278,7 @@ net.Receive("wblreqChangesellvalammoToS", function(len, wblply)
     local ammoClass = net.ReadString()
     local NewSellVal = net.ReadInt(32)
     UpdateAmmoSellValue(ammoClass, NewSellVal)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 -- issue #19: player sells ALL reserve of their held weapon's primary/secondary ammo at
@@ -3218,7 +3339,7 @@ net.Receive("wblreqChangeqtyammoToS", function(len, wblply)
     local ammoClass = net.ReadString()
     local Newqty = net.ReadInt(32)
     UpdateAmmoQuantity(ammoClass, Newqty)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 net.Receive("wblreqChangemaxqtyammoToS", function(len, wblply)
@@ -3226,7 +3347,7 @@ net.Receive("wblreqChangemaxqtyammoToS", function(len, wblply)
     local ammoClass = net.ReadString()
     local Newqty = net.ReadInt(32)
     UpdateAmmoMaxQuantity(ammoClass, Newqty)
-    CompressAndSendTable("wbladdammolistToC", wblammolist, wblply)
+    WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
 

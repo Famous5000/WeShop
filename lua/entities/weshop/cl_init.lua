@@ -220,8 +220,14 @@ net.Receive("wblupdatepricetoClient",function()
 
 end)
 
---Signal "WinPop" received from server when entity is used by player
-net.Receive("wblWinPop",function()	
+--Signal "WinPop" received from server when entity is used by player.
+--
+-- The build is a function now rather than the receiver body itself, because the
+-- catalogue is PULLED instead of pushed: the server no longer ships the weapon
+-- list ahead of this signal, so the menu has to wait until the list it renders
+-- has actually arrived. WeShopEnsureCatalogue runs this immediately when
+-- cl_localShop already matches wbl_shopVer, which is the common case.
+local function WblBuildShopMenu()
 
 wblBuyMenu = vgui.Create("DFrame")
 wblBuyMenu:SetSize(1280*Adjw, 720*Adjh)
@@ -231,9 +237,28 @@ wblBuyMenu:SetDraggable(false)
 wblBuyMenu:MakePopup()
 wblBuyMenu:Center()    
 wblBuyMenu.Paint = function(self, w, h)
-    draw.RoundedBox(0, 0, 0, w, h, Color(50, 50, 50, 235)) 
+    draw.RoundedBox(0, 0, 0, w, h, Color(50, 50, 50, 235))
     surface.SetDrawColor(255, 255, 0, 150) -- Yellow color with 150 alpha for transparency
     surface.DrawOutlinedRect(0, 0, w, h, 2) -- Draw the outline with a 2-pixel width
+end
+
+-- Close this frame again if the catalogue changes while it is open; what it
+-- renders is a pulled snapshot, and the server buys against the live list.
+-- Armed here rather than at the end of the build so that any frame which
+-- exists is watched, even if something below this errors out.
+-- Nil-guarded for the same reason as WeShopEnsureCatalogue below: that function
+-- and this one both live in weshop_menu.lua, and load order between the two
+-- files is not guaranteed.
+if WeShopWatchShopVer then WeShopWatchShopVer() end
+
+-- Claim the unfreeze handler that wblFreeze left for us. It parks one here when it
+-- arrives before this frame exists, which is the normal order on a stale-catalogue open
+-- now that the build waits on chunks. Attaching it is what lets closing the shop send
+-- wblUnfreeze; without it the player closes the menu and stays frozen.
+-- Done immediately after the frame is created so it survives an error further down.
+if WeShopPendingUnfreeze then
+    wblBuyMenu.OnRemove = WeShopPendingUnfreeze
+    WeShopPendingUnfreeze = nil
 end
 
 --wblweaponlist = net.ReadTable()
@@ -295,17 +320,21 @@ local remnumbut = #wblweaponlist
 			name:SetImageColor(Color(255, 255, 255, 150))
 		end
 
+		-- Paths are lowercase to match the files on disk. gmad lowercases every
+		-- path when it builds the addon, and lookups inside a mounted GMA are
+		-- case-sensitive -- so "materials/HP.png" resolves from a loose Windows
+		-- folder during development and then silently fails once published.
 		--Medkit Icon
-		CreateIconframe(WeshopMedkit, "materials/HP.png", 870, 170)
-		
+		CreateIconframe(WeshopMedkit, "materials/hp.png", 870, 170)
+
 		--Armor Icon
-		CreateIconframe(WeshopBattery, "materials/AP.png", 870, 307.5)
+		CreateIconframe(WeshopBattery, "materials/ap.png", 870, 307.5)
 
 		--Primary Ammo Icon
-		CreateIconframe(WeshopAmmo1, "materials/PA.png", 870, 445)
+		CreateIconframe(WeshopAmmo1, "materials/pa.png", 870, 445)
 
 		--Secondary Ammo Icon
-		CreateIconframe(WeshopAmmo2, "materials/SA.png", 870, 582.5)
+		CreateIconframe(WeshopAmmo2, "materials/sa.png", 870, 582.5)
 
 		--Scroll Panel for Button Categories
 		local CatscrollPanel = vgui.Create("DScrollPanel", wblBuyMenu)
@@ -1185,7 +1214,18 @@ local remnumbut = #wblweaponlist
 	]]
 
 
-		
+
+end
+
+net.Receive("wblWinPop", function()
+	-- Pull the catalogue first if this client's copy is stale, then build.
+	-- Nil-guarded because weshop_menu.lua owns WeShopEnsureCatalogue and nothing
+	-- guarantees its load order relative to this file.
+	if WeShopEnsureCatalogue then
+		WeShopEnsureCatalogue(WblBuildShopMenu)
+	else
+		WblBuildShopMenu()
+	end
 end)
 
 --Stop the player from moving when touching the store until done
@@ -1197,13 +1237,36 @@ net.Receive("wblFreeze", function()
 	--wblhuden = 1
 	MoneyTextposx = 0.50
 	MoneyTextposy = 0.95
-	function wblBuyMenu:OnRemove()
+
+	-- This handler restores the money HUD and, crucially, tells the server to UNFREEZE.
+	-- It must end up on whatever frame the player eventually closes.
+	local restore = function()
 		MoneyTextposx = origx
 		MoneyTextposy = origy
 		--wblhuden = orighuden
 		surface.PlaySound("items/ammocrate_close.wav")
 		net.Start("wblUnfreeze")
 		net.SendToServer()
+	end
+
+	-- ⚠ Do NOT assume the frame exists yet. The server sends wblWinPop and then
+	-- wblFreeze, and wblWinPop USED to build the menu synchronously, so wblBuyMenu was
+	-- always there by now. Catalogue pulling made that build asynchronous: when this
+	-- client's copy is stale, WblBuildShopMenu does not run until the chunks land, which
+	-- is several frames later at best.
+	--
+	-- Indexing wblBuyMenu here when it is nil does not merely error -- it aborts this
+	-- receiver before `restore` is attached to anything, so closing the shop never sends
+	-- wblUnfreeze and the player is left frozen with no way out. Observed live on
+	-- 2026-10-10: "attempt to index global 'wblBuyMenu' (a nil value)" followed by eaten
+	-- inputs.
+	--
+	-- So: attach now if the frame is already up (the warm-cache path, still the common
+	-- case), otherwise hand it to WblBuildShopMenu to attach when it creates the frame.
+	if IsValid(wblBuyMenu) then
+		wblBuyMenu.OnRemove = restore
+	else
+		WeShopPendingUnfreeze = restore
 	end
 end)
 
