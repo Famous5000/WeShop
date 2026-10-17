@@ -77,6 +77,7 @@ util.AddNetworkString("wblreqChangenameammoToS")
 util.AddNetworkString("wblreqChangepriceammoToS")
 util.AddNetworkString("wblreqChangesellvalammoToS") -- issue #19: admin set ammo sell value
 util.AddNetworkString("wblSellAmmo") -- issue #19: player sells held weapon's reserve ammo
+util.AddNetworkString("wblSellAmmoEmpty") -- issue #19: less than one batch in reserve to sell
 util.AddNetworkString("wblreqChangeqtyammoToS")
 util.AddNetworkString("wblreqChangemaxqtyammoToS")
 util.AddNetworkString("wblreqdeleteammoToS")
@@ -833,7 +834,7 @@ local function AddAmmo(ammoName, ammoClass, price, quantity, maxQuantity, sellVa
         price = price,
         quantity = quantity,
         maxquantity = maxQuantity,
-        sellvalue = sellValue or 0  -- issue #19: owner-set ammo sell value (per unit), 0 = unsellable
+        sellvalue = sellValue or 0  -- issue #19: owner-set ammo sell value (per batch), 0 = unsellable
     })
 end
 
@@ -1245,6 +1246,22 @@ PrintTable(wblweaponlist)
 --FUNCTIONS TO MAKE YOUR OWN TABLE STOP--
 
 
+-- issue #19: per-batch sell value of the held weapon's primary/secondary ammo, or 0 if
+-- it can't be sold. Mirrors the lookup in the wblSellAmmo handler, so the client only
+-- shows a sell button that would succeed, and the payout it prints is the real one.
+local function WblHeldAmmoSellValue(ply, secondary)
+    local weapon = ply:GetActiveWeapon()
+    if not IsValid(weapon) then return 0 end
+    local foundWeapon = FindWeaponByClass(weapon:GetClass())
+    if foundWeapon == nil then return 0 end
+    local ammoName = secondary and foundWeapon.ammo2 or foundWeapon.ammo1
+    if (not ammoName) or ammoName == "N.A." then return 0 end
+    local ammo = FindAmmoByName(ammoName)
+    if ammo == nil then return 0 end
+    local sellval = tonumber(ammo.sellvalue) or 0
+    return sellval > 0 and sellval or 0
+end
+
 function updatepricesinstore(ply)
     wblDebug("Updated the Prices in store (HP/AP/Default sell value)")
 	net.Start("wblupdatepricetoClient")
@@ -1255,6 +1272,8 @@ function updatepricesinstore(ply)
 	net.WriteString(tostring(weapsellvaluetosend))
 	net.WriteString(tostring(ammo1price))
 	net.WriteString(tostring(ammo2price))
+	net.WriteInt(WblHeldAmmoSellValue(ply, false), 32)
+	net.WriteInt(WblHeldAmmoSellValue(ply, true), 32)
 	net.Send(ply)
 end
 
@@ -2194,6 +2213,19 @@ function WeShopBumpShopVer()
     -- and looks like a phantom resync.
     cv:SetInt(nextVer)
     wblDebug("Catalogue version bumped to " .. nextVer)
+
+    -- Admins get the new catalogue IMMEDIATELY, shop open or not: the admin menu
+    -- renders it, and pull-on-open alone left that menu showing pre-edit lists.
+    -- Players still pull on open. A zero-delay timer coalesces the several bumps
+    -- one admin action can make into ONE push next frame, at the final version.
+    timer.Create("WeShopAdminCataloguePush", 0, 1, function()
+        for _, ply in ipairs(player.GetHumans()) do
+            if ply:IsAdmin() or ply:IsSuperAdmin() then
+                CompressAndSendTable("wbladdweaponlistToC", wblweaponlist, ply)
+                CompressAndSendTable("wbladdammolistToC", wblammolist, ply)
+            end
+        end
+    end)
     return nextVer
 end
 
@@ -3281,8 +3313,8 @@ net.Receive("wblreqChangesellvalammoToS", function(len, wblply)
     WeShopBumpShopVer() -- clients re-pull on next shop open; nothing is sent now
 end)
 
--- issue #19: player sells ALL reserve of their held weapon's primary/secondary ammo at
--- the owner-set per-unit sell value. Server-authoritative -- the value is looked up here,
+-- issue #19: player sells one buy-batch of their held weapon's primary/secondary ammo at
+-- the owner-set per-batch sell value. Server-authoritative -- the value is looked up here,
 -- never trusted from the client. Uses changeMoney so it also works with the #22 pool.
 net.Receive("wblSellAmmo", function(len, ply)
     local secondary = net.ReadBool() -- false = primary ammo, true = secondary ammo
@@ -3320,16 +3352,20 @@ net.Receive("wblSellAmmo", function(len, ply)
         net.Send(ply)
         return
     end
+    -- Sell exactly one buy-batch (ammo.quantity) per click at the PER-BATCH sell value,
+    -- matching the buy price. Less than a full batch is refused, not sold pro rata.
     local reserve = ply:GetAmmoCount(ammo.class)
-    if reserve <= 0 then
-        net.Start("wblplynoammotypesound")
-        net.WriteInt(1, 16)
+    local batch = tonumber(ammo.quantity) or 0
+    if batch <= 0 then batch = reserve end
+    if reserve <= 0 or reserve < batch then
+        net.Start("wblSellAmmoEmpty")
+        net.WriteBool(secondary)
+        net.WriteBool(reserve > 0) -- true = some, but less than a batch
         net.Send(ply)
         return
     end
-    -- Sell all reserve of this ammo type at the per-unit value.
-    AddReserveAmmo(ply, ammo.class, -reserve)
-    changeMoney(ply, sellval * reserve)
+    AddReserveAmmo(ply, ammo.class, -batch)
+    changeMoney(ply, sellval)
     net.Start("wblSellweaponsound")
     net.Send(ply)
 end)
