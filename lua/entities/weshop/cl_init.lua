@@ -186,6 +186,10 @@ local AP25price
 local ammo1price
 local ammo2price
 local weapsellvalue
+-- issue #19: per-batch sell value of the held weapon's ammo, from the server.
+-- 0 means unsellable, and that button is not shown.
+local ammo1sellval = 0
+local ammo2sellval = 0
 wblweaponlist = {}
 wblammolist = {}
 
@@ -200,6 +204,8 @@ net.Receive("wblupdatepricetoClient",function()
 	weapsellvalue = tostring(net.ReadString())
 	local ammo1 = tostring(net.ReadString())
 	local ammo2 = tostring(net.ReadString())
+	ammo1sellval = net.ReadInt(32)
+	ammo2sellval = net.ReadInt(32)
 
 
 	if ammo1 == "N.A." then
@@ -897,24 +903,32 @@ local remnumbut = #wblweaponlist
 
 		end
 
-		-- issue #19: sell-ammo button. Sells ALL reserve of the held weapon's primary or
+		-- issue #19: sell-ammo button. Sells one buy-batch of the held weapon's primary or
 		-- secondary ammo (server decides value/eligibility). secondary=false -> primary.
-		local function CreateSellAmmoButton(xposition, yposition, label, secondary)
+		local function CreateSellAmmoButton(xposition, yposition, width, height, label, secondary, sellval)
 			local name = vgui.Create("DButton", wblBuyMenu)
-			name:SetSize(150*Adjw, 50*Adjh)
+			name:SetSize(width*Adjw, height*Adjh)
 			name:SetText("")
 			name:SetFont("Buybutton")
 			name:SetPos( xposition*Adjw, yposition*Adjh )
 			name.isClicked = false
 			name.isHovered = false
+			-- Same layout as "Sell Currently Held Weapon": label left, payout right.
+			local payout = "( "..WblCurrency()..sellval.." )"
 			function name:Paint(w, h)
-				local col = Color(0, 0, 0, 0)
-				if name.isClicked then col = Color(255, 170, 0, 90)
-				elseif name.isHovered then col = Color(255, 170, 0, 45) end
-				draw.RoundedBox(0, 0, 0, w, h, col)
-				surface.SetDrawColor(255, 170, 0, 150)
+				if name.isClicked then
+					draw.RoundedBox(0, 0, 0, w, h, Color(255, 255, 0, 75))
+					draw.SimpleText(label, "SellButtonClicked", 10*Adjw, h / 2, Color(255, 255, 255, 220), TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+					draw.SimpleText(payout, "SellButtonClicked", w - 10*Adjw, h / 2, Color(255, 255, 255, 220), TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+				else
+					if name.isHovered then
+						draw.RoundedBox(0, 0, 0, w, h, Color(255, 255, 0, 40))
+					end
+					draw.SimpleText(label, "SellButton", 10*Adjw, h / 2, Color(255, 255, 0, 150), TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+					draw.SimpleText(payout, "SellButton", w - 10*Adjw, h / 2, Color(0, 255, 0, 150), TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+				end
+				surface.SetDrawColor(255, 255, 0, 150)
 				surface.DrawOutlinedRect(0, 0, w, h, 2)
-				draw.SimpleText(label, "Buybutton", w / 2, h / 2, Color(255, 170, 0, 200), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
 			end
 			name.OnCursorEntered = function() name.isHovered = true end
 			name.OnCursorExited = function() name.isHovered = false end
@@ -1103,10 +1117,13 @@ local remnumbut = #wblweaponlist
 		--Price Label for all Primary ammo button
 		CreatePriceDlabel(WeshopSecammo2Label, wblBuyMenu, 1170, 632.5, ammo2pricefull)
 
-		-- issue #19: sell-ammo buttons -- sell ALL reserve of the held weapon's ammo type.
-		-- Positions are a first guess; nudge xposition/yposition to taste.
-		CreateSellAmmoButton(1320, 440, "Sell Ammo", false)
-		CreateSellAmmoButton(1320, 577.5, "Sell Alt Ammo", true)
+		-- issue #19: sell-ammo buttons -- sell one buy-batch of the held weapon's ammo type.
+		-- Side by side under "Sell Currently Held Weapon" (x32 y610 w450 h50), splitting its
+		-- width with a 10 gap. The frame is 1280x720, so everything here must stay inside it:
+		-- the first version sat at x1320, past the right edge, and was clipped invisible.
+		-- Each only appears when the held weapon's ammo of that kind has a sell value.
+		if ammo1sellval > 0 then CreateSellAmmoButton(32, 666, 220, 44, "Sell Ammo", false, ammo1sellval) end
+		if ammo2sellval > 0 then CreateSellAmmoButton(262, 666, 220, 44, "Sell Alt Ammo", true, ammo2sellval) end
 
 		wblBuyMenu.OnKeyCodePressed = function(self, keyCode)
 			if keyCode == KEY_E or keyCode == KEY_B then
@@ -1372,6 +1389,17 @@ net.Receive("wblplynoammotypesound", function()
 		notification.AddLegacy("Weapon doesn't need primary ammo!", NOTIFY_ERROR, 5)
 	else
 		notification.AddLegacy("Weapon doesn't need secondary ammo!", NOTIFY_ERROR, 5)
+	end
+	surface.PlaySound("buttons/button1.wav")
+end)
+
+-- issue #19: Sell Ammo / Sell Alt Ammo pressed with less than one full batch in reserve.
+net.Receive("wblSellAmmoEmpty", function()
+	local kind = net.ReadBool() and "alt ammo" or "ammo"
+	if net.ReadBool() then
+		notification.AddLegacy("You don't have enough "..kind.." to sell!", NOTIFY_ERROR, 5)
+	else
+		notification.AddLegacy("You have no "..kind.." to sell!", NOTIFY_ERROR, 5)
 	end
 	surface.PlaySound("buttons/button1.wav")
 end)

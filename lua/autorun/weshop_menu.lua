@@ -481,6 +481,17 @@ function WeShopEnsureCatalogue(onReady)
     net.SendToServer()
 end
 
+-- The admin menu lives in the spawn menu, which builds its panels ONCE and reuses
+-- them, so the WeShopEnsureCatalogue call inside the panel only ever ran on the first
+-- open. Re-check on every open so an admin always reads the current shop. Sends
+-- nothing when already current; the WeShopOnCatalogue listeners refresh the lists.
+hook.Add("OnSpawnMenuOpen", "WeShopAdminCatalogueSync", function()
+    local ply = LocalPlayer()
+    if IsValid(ply) and (ply:IsAdmin() or ply:IsSuperAdmin()) then
+        WeShopEnsureCatalogue()
+    end
+end)
+
 --[[---------------------------------------------------------------------------
     An open shop must not survive an admin edit.
 
